@@ -3,8 +3,12 @@ data/*.json
 data/*.jsonl
 data/mlx*/
 
-# Model adapters
+# Model adapters & weights
 adapters/
+models/
+
+# Evaluation results
+results/
 
 # Python
 __pycache__/

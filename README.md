@@ -115,13 +115,32 @@ Structured reasoning with Stockfish analysis:
 
 The `[Context]` tag classifies the position based on evaluation change: `book`, `good`, `excellent`, `inaccuracy`, `mistake`, or `blunder`. This helps the model learn when moves matter most.
 
+## Evaluation
+
+Measure the model's Elo by playing automated games against Stockfish at various strength levels:
+
+```bash
+# Evaluate the annotated model
+uv run python src/evaluate.py --annotated
+
+# Evaluate basic model, custom settings
+uv run python src/evaluate.py --games-per-level 40 --elo-levels 800 1000 1200 1500
+```
+
+This plays 20 games per Elo level (half as white, half as black) and outputs:
+- Win/draw/loss record at each level
+- Legal move percentage (how often the model generates valid moves)
+- Estimated Elo rating using the performance rating formula
+- Detailed per-game results saved to `results/`
+
 ## Project Structure
 
 ```
 chess/
 ├── pyproject.toml                  # dependencies (managed by uv)
 ├── data/                           # training data (gitignored)
-│   ├── games.json                  # cached raw games
+│   ├── games_checkpoint.jsonl      # download checkpoint (resumable)
+│   ├── annotations_checkpoint.jsonl # annotation checkpoint (resumable)
 │   ├── train.jsonl                 # basic training examples
 │   ├── valid.jsonl                 # basic validation examples
 │   ├── train_annotated.jsonl       # annotated training examples
@@ -129,11 +148,15 @@ chess/
 ├── adapters/                       # LoRA weights (gitignored)
 │   ├── basic/                      # basic model adapters
 │   └── annotated/                  # annotated model adapters
+├── models/                         # downloaded base model (gitignored)
+├── results/                        # evaluation results (gitignored)
 └── src/
+    ├── utils.py                    # shared utilities (download, checkpointing, logging)
     ├── prepare_data.py             # basic data pipeline
     ├── prepare_data_annotated.py   # Stockfish-annotated data pipeline
     ├── train.py                    # MLX LoRA fine-tuning
-    └── play.py                     # interactive chess interface
+    ├── play.py                     # interactive chess interface
+    └── evaluate.py                 # automated Elo evaluation
 ```
 
 ## How It Works
