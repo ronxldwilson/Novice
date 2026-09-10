@@ -20,6 +20,7 @@ Qwen 2.5 0.5B + LoRA (rank 32, all 24 layers), masked completion loss,
 |---|---|---|---|---|
 | untrained (control) | 5.0% | 17.5% | 0.155 | 1.2× — chance |
 | 1000 iters | 11.7% | 30.0% | 0.268 | 2.7× |
+| 3000 iters | 15.0% | 36.7% | 0.297 | 3.5× |
 
 Measured on 60 held-out positions each, constrained ranking, greedy.
 
