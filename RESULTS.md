@@ -51,6 +51,35 @@ filter cannot manufacture a plan.
 
 ---
 
+## Stage 2 — Stockfish labels
+
+Stage-1 adapters continued on 58K Stockfish-labelled positions (lr 5e-5, 4000
+iters). Measured against *Stockfish's* choice on held-out positions:
+
+| Model | top1 | top3 | MRR | lift |
+|---|---|---|---|---|
+| stage 1 (human labels, plateaued) | 11.7–15.0% | 23–37% | 0.245 | 2.7× |
+| stage 2 (Stockfish labels) | **20.0%** | **40.0%** | **0.352** | **4.8×** |
+
+Changing the labels moved the number that more training could not.
+
+### First wins against Stockfish
+
+10 games vs **Stockfish Skill Level 0, depth 1**, constrained ranking + SEE filter:
+
+| W | D | L | Score | Legal % |
+|---|---|---|---|---|
+| 2 | 1 | 7 | **25%** | 100% |
+
+Both wins were checkmates. An earlier 4-game probe showed 50%, which the larger
+sample corrected to 25% — small samples flatter, and the 10-game figure is the
+one to trust.
+
+`UCI_Elo` floors at 1320, which initially hid the fact that a usable difficulty
+ladder exists below it. `Skill Level` is a separate knob; at 0 the engine
+deliberately plays inferior moves. The opponent configuration is always stated
+because "beat Stockfish" is meaningless without it.
+
 ## Baselines
 
 ### Untrained model, no scaffolding
