@@ -83,11 +83,20 @@ def best_move(
     temperature: float = 0.0,
     length_normalize: bool = True,
     rng=None,
+    safe: bool = False,
 ) -> chess.Move:
-    """Pick a legal move by constrained scoring. Always returns a legal move."""
+    """Pick a legal move by constrained scoring. Always returns a legal move.
+
+    With safe=True, the model's top candidates are reordered so that moves
+    hanging material fall behind sound ones (see tactics.filter_blunders).
+    """
     ranked = score_moves(model, tokenizer, board, length_normalize, rng)
     if not ranked:
         raise ValueError("no legal moves")
+
+    if safe:
+        from tactics import filter_blunders
+        ranked = filter_blunders(board, ranked)
 
     if temperature <= 0:
         san = ranked[0][0]

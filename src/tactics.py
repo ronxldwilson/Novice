@@ -99,8 +99,8 @@ def material_delta(board: chess.Board, move: chess.Move) -> int:
 def filter_blunders(
     board: chess.Board,
     ranked: list[tuple[str, float]],
-    top_k: int = 8,
-    tolerance: int = 100,
+    top_k: int = 12,
+    tolerance: int = 90,
 ) -> list[tuple[str, float]]:
     """Reorder the model's top_k so material-losing moves fall behind safe ones.
 

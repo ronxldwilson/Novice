@@ -187,8 +187,10 @@ def play_game(
 
         if is_model_turn:
             t0 = time.time()
-            if mode == "constrained":
-                move, was_legal = best_move(model, tokenizer, board, temperature=0.0), True
+            if mode in ("constrained", "safe"):
+                move = best_move(model, tokenizer, board, temperature=0.0,
+                                 safe=(mode == "safe"))
+                was_legal = True
             elif mode == "selection":
                 move, was_legal = get_model_move_selection(model, tokenizer, board, temperature)
             elif mode == "annotated" and eval_engine:
@@ -308,6 +310,8 @@ def main():
     parser.add_argument("--selection", action="store_true", help="Use selection model (legal moves)")
     parser.add_argument("--constrained", action="store_true",
                         help="Score every legal move and take argmax (always legal)")
+    parser.add_argument("--safe", action="store_true",
+                        help="Constrained ranking plus SEE blunder filter")
     parser.add_argument("--adapter-path", default=None)
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--elo-levels", type=int, nargs="+", default=ELO_LEVELS)
@@ -322,7 +326,7 @@ def main():
     # Load model
     if args.adapter_path:
         adapter_path = Path(args.adapter_path)
-    elif args.selection or args.constrained:
+    elif args.selection or args.constrained or args.safe:
         adapter_path = ADAPTERS_SELECTION
     elif args.annotated:
         adapter_path = ADAPTERS_ANNOTATED
@@ -350,7 +354,8 @@ def main():
 
     random.seed(args.seed)
 
-    mode = ("constrained" if args.constrained else "selection" if args.selection
+    mode = ("safe" if args.safe else "constrained" if args.constrained
+            else "selection" if args.selection
             else "annotated" if args.annotated else "basic")
     log(f"Mode: {mode}")
     log(f"Elo levels: {args.elo_levels}")
