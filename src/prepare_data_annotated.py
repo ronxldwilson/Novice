@@ -1,31 +1,31 @@
-"""Prepare Stockfish-annotated chess training data.
+"""Prepare Stockfish-annotated chess training data with checkpoint/resume support.
 
 Instead of raw move sequences, each training example includes:
 - The position (move history)
 - Stockfish evaluation of the position
 - Top candidate moves with their evaluations
 - The best move with a short tactical tag
-
-This teaches the model to reason about positions, not just memorize move patterns.
 """
 
 import argparse
-import io
 import json
-import multiprocessing as mp
-import os
 import random
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 import chess
 import chess.engine
-import chess.pgn
-import requests
-import zstandard
 
+from utils import (
+    download_games,
+    fmt_num,
+    fmt_time,
+    load_checkpoint,
+    log,
+    progress_bar,
+    save_jsonl,
+)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 LICHESS_DB_URL = "https://database.lichess.org/standard/lichess_db_standard_rated_2024-01.pgn.zst"
@@ -36,39 +36,10 @@ STOCKFISH_PATH = "stockfish"
 STOCKFISH_DEPTH = 12
 NUM_CANDIDATES = 3
 POSITIONS_PER_GAME = 8
-
-
-def fmt_time(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        return f"{seconds // 60:.0f}m {seconds % 60:.0f}s"
-    else:
-        return f"{seconds // 3600:.0f}h {(seconds % 3600) // 60:.0f}m"
-
-
-def fmt_num(n: int) -> str:
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    elif n >= 1_000:
-        return f"{n / 1_000:.1f}K"
-    return str(n)
-
-
-def log(msg: str):
-    timestamp = time.strftime("%H:%M:%S")
-    print(f"[{timestamp}] {msg}", flush=True)
-
-
-def progress_bar(current: int, total: int, width: int = 30) -> str:
-    pct = current / total if total > 0 else 0
-    filled = int(width * pct)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"[{bar}] {pct:.1%}"
+ANNOTATION_CHUNK_SIZE = 500
 
 
 def format_eval(score: chess.engine.PovScore, board: chess.Board) -> str:
-    """Format engine score from white's perspective."""
     white_score = score.white()
     if white_score.is_mate():
         mate_in = white_score.mate()
@@ -78,14 +49,11 @@ def format_eval(score: chess.engine.PovScore, board: chess.Board) -> str:
 
 
 def classify_position(eval_before: float | None, eval_after: float | None, is_white: bool) -> str:
-    """Classify a move based on eval change."""
     if eval_before is None or eval_after is None:
         return ""
-
     delta = eval_after - eval_before
     if not is_white:
         delta = -delta
-
     if delta < -2.0:
         return "blunder"
     elif delta < -0.8:
@@ -100,17 +68,14 @@ def classify_position(eval_before: float | None, eval_after: float | None, is_wh
 
 
 def get_eval_score_numeric(score: chess.engine.PovScore) -> float | None:
-    """Convert PovScore to a numeric value from white's perspective."""
     white_score = score.white()
     if white_score.is_mate():
-        mate_in = white_score.mate()
-        return 100.0 if mate_in > 0 else -100.0
+        return 100.0 if white_score.mate() > 0 else -100.0
     cp = white_score.score()
     return cp / 100.0 if cp is not None else None
 
 
 def move_history_to_san(board: chess.Board) -> str:
-    """Convert board's move history to SAN string."""
     temp = board.copy()
     moves = list(temp.move_stack)
     temp.reset()
@@ -118,86 +83,14 @@ def move_history_to_san(board: chess.Board) -> str:
     for i, move in enumerate(moves):
         san = temp.san(move)
         if i % 2 == 0:
-            move_num = i // 2 + 1
-            parts.append(f"{move_num}.{san}")
+            parts.append(f"{i // 2 + 1}.{san}")
         else:
             parts.append(san)
         temp.push(move)
     return " ".join(parts)
 
 
-def download_and_stream_pgn(url: str, max_games: int, min_elo: int):
-    """Stream PGN games from a zstd-compressed Lichess database."""
-    log(f"Connecting to Lichess database...")
-    log(f"Filters: both players >= {min_elo} Elo, target: {fmt_num(max_games)} games")
-    print("─" * 60, flush=True)
-
-    resp = requests.get(url, stream=True)
-    resp.raise_for_status()
-
-    total_size = int(resp.headers.get("content-length", 0))
-    if total_size:
-        log(f"Download size: {total_size / (1024**3):.1f} GB (compressed)")
-
-    dctx = zstandard.ZstdDecompressor()
-    reader = dctx.stream_reader(resp.raw)
-    text_stream = io.TextIOWrapper(reader, encoding="utf-8")
-
-    games = []
-    seen = 0
-    kept = 0
-    start_time = time.time()
-    last_log_time = start_time
-
-    log("Streaming and filtering games...")
-
-    while kept < max_games:
-        game = chess.pgn.read_game(text_stream)
-        if game is None:
-            break
-
-        seen += 1
-        now = time.time()
-
-        if now - last_log_time >= 5:
-            elapsed = now - start_time
-            rate = kept / elapsed if elapsed > 0 else 0
-            eta_str = f"ETA: {fmt_time((max_games - kept) / rate)}" if rate > 0 else "ETA: ..."
-            pbar = progress_bar(kept, max_games)
-            log(f"{pbar}  {fmt_num(kept)}/{fmt_num(max_games)} kept  |  scanned: {fmt_num(seen)}  |  {rate:.0f}/s  |  {eta_str}")
-            last_log_time = now
-
-        white_elo = game.headers.get("WhiteElo", "?")
-        black_elo = game.headers.get("BlackElo", "?")
-        if white_elo == "?" or black_elo == "?":
-            continue
-        if int(white_elo) < min_elo or int(black_elo) < min_elo:
-            continue
-
-        result = game.headers.get("Result", "*")
-        if result == "*":
-            continue
-
-        moves = []
-        board = game.board()
-        for move in game.mainline_moves():
-            moves.append(board.san(move))
-            board.push(move)
-
-        if len(moves) < 10:
-            continue
-
-        games.append({"moves": moves, "result": result})
-        kept += 1
-
-    elapsed = time.time() - start_time
-    print("─" * 60, flush=True)
-    log(f"Download complete: {fmt_num(kept)} games from {fmt_num(seen)} scanned in {fmt_time(elapsed)}")
-    return games
-
-
 def annotate_game(game: dict, engine: chess.engine.SimpleEngine, depth: int, num_candidates: int, positions_per_game: int) -> list[dict]:
-    """Annotate selected positions from a game with Stockfish analysis."""
     moves = game["moves"]
     board = chess.Board()
     examples = []
@@ -226,11 +119,7 @@ def annotate_game(game: dict, engine: chess.engine.SimpleEngine, depth: int, num
             break
 
         try:
-            analysis = engine.analyse(
-                board,
-                chess.engine.Limit(depth=depth),
-                multipv=num_candidates,
-            )
+            analysis = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=num_candidates)
         except Exception:
             continue
 
@@ -245,66 +134,97 @@ def annotate_game(game: dict, engine: chess.engine.SimpleEngine, depth: int, num
         for info in analysis:
             pv = info.get("pv", [])
             if pv:
-                move_san = board.san(pv[0])
-                move_eval = format_eval(info["score"], board)
-                candidates.append(f"{move_san} ({move_eval})")
+                candidates.append(f"{board.san(pv[0])} ({format_eval(info['score'], board)})")
 
         best_move_san = board.san(analysis[0]["pv"][0]) if analysis[0].get("pv") else None
         if not best_move_san:
             continue
 
         tag = classify_position(prev_eval, current_eval, not is_white)
-
         history = move_history_to_san(board)
         side = "White" if is_white else "Black"
 
-        prompt = f"[Position] {history}\n[Eval] {position_eval}\n[Side] {side} to move\n[Candidates] {', '.join(candidates)}\n[Best]"
-        completion = f" {best_move_san}"
-
         if tag:
-            prompt_with_ctx = f"[Position] {history}\n[Eval] {position_eval}\n[Side] {side} to move\n[Context] {tag}\n[Candidates] {', '.join(candidates)}\n[Best]"
+            prompt = f"[Position] {history}\n[Eval] {position_eval}\n[Side] {side} to move\n[Context] {tag}\n[Candidates] {', '.join(candidates)}\n[Best]"
         else:
-            prompt_with_ctx = prompt
+            prompt = f"[Position] {history}\n[Eval] {position_eval}\n[Side] {side} to move\n[Candidates] {', '.join(candidates)}\n[Best]"
 
-        examples.append({"text": f"{prompt_with_ctx}{completion}"})
-
+        examples.append({"text": f"{prompt} {best_move_san}"})
         prev_eval = current_eval
 
     return examples
 
 
-def annotate_games_batch(games: list[dict], depth: int, num_candidates: int, positions_per_game: int) -> list[dict]:
-    """Annotate a batch of games with Stockfish."""
+def annotate_with_checkpoints(
+    games: list[dict],
+    checkpoint_path: Path,
+    depth: int,
+    num_candidates: int,
+    positions_per_game: int,
+    chunk_size: int,
+) -> list[dict]:
+    """Annotate games with Stockfish, checkpointing every chunk_size games."""
+    existing = load_checkpoint(checkpoint_path)
+    already_done = len(existing)
+
+    if already_done >= len(games):
+        log(f"Annotation checkpoint complete: {fmt_num(already_done)} examples already saved")
+        return existing
+
+    if already_done > 0:
+        log(f"Resuming annotation: {fmt_num(already_done)} examples from previous run")
+        games_done = 0
+        count = 0
+        for game in games:
+            n = min(positions_per_game, len(game["moves"]) - 1)
+            count += n
+            games_done += 1
+            if count >= already_done:
+                break
+        log(f"Skipping ~{fmt_num(games_done)} already-annotated games")
+    else:
+        games_done = 0
+
     engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
     engine.configure({"Threads": 1, "Hash": 64})
 
-    all_examples = []
+    chunk_buffer = []
+    total_new = 0
     start = time.time()
 
-    for i, game in enumerate(games):
-        examples = annotate_game(game, engine, depth, num_candidates, positions_per_game)
-        all_examples.extend(examples)
+    for i in range(games_done, len(games)):
+        examples = annotate_game(games[i], engine, depth, num_candidates, positions_per_game)
+        chunk_buffer.extend(examples)
+        total_new += len(examples)
 
-        if (i + 1) % 100 == 0:
+        if (i - games_done + 1) % 100 == 0:
             elapsed = time.time() - start
-            rate = (i + 1) / elapsed
+            done_in_run = i - games_done + 1
+            rate = done_in_run / elapsed
+            remaining = len(games) - i - 1
             log(
                 f"  Annotating: {progress_bar(i + 1, len(games))}  "
                 f"{i + 1}/{len(games)} games  |  "
-                f"{fmt_num(len(all_examples))} examples  |  "
+                f"{fmt_num(already_done + total_new)} total examples  |  "
                 f"{rate:.1f} games/s  |  "
-                f"ETA: {fmt_time((len(games) - i - 1) / rate)}"
+                f"ETA: {fmt_time(remaining / rate) if rate > 0 else '...'}"
             )
 
+        if len(chunk_buffer) >= chunk_size:
+            with open(checkpoint_path, "a") as f:
+                for ex in chunk_buffer:
+                    f.write(json.dumps(ex) + "\n")
+            log(f"  Checkpoint: +{len(chunk_buffer)} examples saved (total: {fmt_num(already_done + total_new)})")
+            chunk_buffer = []
+
+    if chunk_buffer:
+        with open(checkpoint_path, "a") as f:
+            for ex in chunk_buffer:
+                f.write(json.dumps(ex) + "\n")
+        log(f"  Final checkpoint: +{len(chunk_buffer)} examples (total: {fmt_num(already_done + total_new)})")
+
     engine.quit()
-    return all_examples
-
-
-def save_jsonl(examples: list[dict], path: Path):
-    with open(path, "w") as f:
-        for ex in examples:
-            f.write(json.dumps(ex) + "\n")
-    log(f"Saved {fmt_num(len(examples))} examples to {path.name}")
+    return load_checkpoint(checkpoint_path)
 
 
 def main():
@@ -312,23 +232,23 @@ def main():
     parser.add_argument("--url", default=LICHESS_DB_URL)
     parser.add_argument("--min-elo", type=int, default=MIN_ELO)
     parser.add_argument("--max-games", type=int, default=MAX_GAMES)
-    parser.add_argument("--depth", type=int, default=STOCKFISH_DEPTH, help="Stockfish search depth")
-    parser.add_argument("--candidates", type=int, default=NUM_CANDIDATES, help="Number of candidate moves")
-    parser.add_argument("--positions-per-game", type=int, default=POSITIONS_PER_GAME, help="Positions to annotate per game")
+    parser.add_argument("--depth", type=int, default=STOCKFISH_DEPTH)
+    parser.add_argument("--candidates", type=int, default=NUM_CANDIDATES)
+    parser.add_argument("--positions-per-game", type=int, default=POSITIONS_PER_GAME)
+    parser.add_argument("--chunk-size", type=int, default=ANNOTATION_CHUNK_SIZE, help="Examples per annotation checkpoint")
+    parser.add_argument("--download-chunk-size", type=int, default=5000, help="Games per download checkpoint")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--use-cached-games", action="store_true", help="Use games.json from previous download")
+    parser.add_argument("--use-cached-games", action="store_true", help="Use games from previous download")
     args = parser.parse_args()
 
     print("=" * 60, flush=True)
-    log("CHESS SLM — STOCKFISH-ANNOTATED DATA PREPARATION")
+    log("NOVICE — STOCKFISH-ANNOTATED DATA PREPARATION")
     print("=" * 60, flush=True)
 
-    # Verify Stockfish
     log(f"Checking Stockfish at '{STOCKFISH_PATH}'...")
     try:
         engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
-        sf_name = engine.id.get("name", "unknown")
-        log(f"Stockfish OK: {sf_name}")
+        log(f"Stockfish OK: {engine.id.get('name', 'unknown')}")
         engine.quit()
     except Exception as e:
         log(f"ERROR: Cannot start Stockfish: {e}")
@@ -338,41 +258,45 @@ def main():
     log(f"Settings: depth={args.depth}, candidates={args.candidates}, positions/game={args.positions_per_game}")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    raw_path = DATA_DIR / "games.json"
+    games_checkpoint = DATA_DIR / "games_checkpoint.jsonl"
+    annotation_checkpoint = DATA_DIR / "annotations_checkpoint.jsonl"
 
-    # Step 1: Get games
+    # Step 1: Get games (with checkpointing)
     print("=" * 60, flush=True)
     log("STEP 1: ACQUIRE GAMES")
     print("─" * 60, flush=True)
 
-    if args.use_cached_games and raw_path.exists():
-        log(f"Using cached games from {raw_path.name}")
-        with open(raw_path) as f:
-            games = json.load(f)
-        log(f"Loaded {fmt_num(len(games))} games")
+    if args.use_cached_games and games_checkpoint.exists():
+        games = load_checkpoint(games_checkpoint)
+        log(f"Using cached games: {fmt_num(len(games))}")
         if len(games) > args.max_games:
             games = games[:args.max_games]
             log(f"Trimmed to {fmt_num(len(games))} games")
     else:
-        games = download_and_stream_pgn(args.url, args.max_games, args.min_elo)
-        with open(raw_path, "w") as f:
-            json.dump(games, f)
-        log(f"Cached {fmt_num(len(games))} games")
+        games = download_games(
+            args.url, args.max_games, args.min_elo,
+            checkpoint_path=games_checkpoint,
+            chunk_size=args.download_chunk_size,
+        )
 
-    # Step 2: Annotate with Stockfish
+    # Step 2: Annotate with Stockfish (with checkpointing)
     print("=" * 60, flush=True)
     log("STEP 2: STOCKFISH ANNOTATION")
     log(f"Annotating {fmt_num(len(games))} games ({args.positions_per_game} positions each, depth {args.depth})")
     log(f"Estimated examples: ~{fmt_num(len(games) * args.positions_per_game)}")
+    log(f"Checkpoint: saving every {args.chunk_size} examples to {annotation_checkpoint.name}")
     print("─" * 60, flush=True)
 
     random.seed(args.seed)
     start = time.time()
-    all_examples = annotate_games_batch(games, args.depth, args.candidates, args.positions_per_game)
+    all_examples = annotate_with_checkpoints(
+        games, annotation_checkpoint,
+        args.depth, args.candidates, args.positions_per_game,
+        args.chunk_size,
+    )
     elapsed = time.time() - start
 
     log(f"Annotation complete: {fmt_num(len(all_examples))} examples in {fmt_time(elapsed)}")
-    log(f"Average: {len(all_examples) / len(games):.1f} examples/game, {len(games) / elapsed:.1f} games/s")
 
     # Step 3: Shuffle & split
     print("=" * 60, flush=True)
@@ -387,13 +311,12 @@ def main():
     save_jsonl(train, DATA_DIR / "train_annotated.jsonl")
     save_jsonl(valid, DATA_DIR / "valid_annotated.jsonl")
 
-    # Show example
+    # Sample
     print("=" * 60, flush=True)
     log("SAMPLE TRAINING EXAMPLE:")
     print("─" * 60, flush=True)
     if all_examples:
-        sample = random.choice(all_examples)
-        print(sample["text"], flush=True)
+        print(random.choice(all_examples)["text"], flush=True)
     print("─" * 60, flush=True)
 
     # Summary
@@ -404,7 +327,7 @@ def main():
     log(f"  Validation: {fmt_num(len(valid))} examples")
     log(f"  Files:      data/train_annotated.jsonl, data/valid_annotated.jsonl")
     print("=" * 60, flush=True)
-    log("Next step: uv run python src/train.py --data-suffix _annotated")
+    log("Next step: uv run python src/train.py --annotated")
 
 
 if __name__ == "__main__":
