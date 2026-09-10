@@ -2,6 +2,7 @@
 
 import io
 import json
+import random
 import time
 from pathlib import Path
 
@@ -45,6 +46,46 @@ def save_jsonl(examples: list[dict], path: Path):
         for ex in examples:
             f.write(json.dumps(ex) + "\n")
     log(f"Saved {fmt_num(len(examples))} examples to {path.name}")
+
+
+HISTORY_PLIES = 12
+
+
+def build_selection_prompt(board: chess.Board, recent: list[str], legal: list[str]) -> str:
+    """Render a position as a move-selection prompt.
+
+    Shared by data generation and inference — keep them identical or the model
+    sees a different format at test time than it trained on.
+    """
+    side = "White" if board.turn == chess.WHITE else "Black"
+    parts = [
+        f"FEN: {board.board_fen()} {'w' if board.turn else 'b'} "
+        f"{board.castling_xfen() if board.castling_rights else '-'} "
+        f"{chess.SQUARE_NAMES[board.ep_square] if board.ep_square else '-'}",
+        f"Move {board.fullmove_number}, {side} to play.",
+    ]
+    if recent:
+        parts.append(f"Recent: {' '.join(recent)}")
+    parts.append(f"Legal moves: {', '.join(legal)}")
+    parts.append("Choose the strongest move.")
+    return "\n".join(parts)
+
+
+def selection_prompt_for_board(board: chess.Board, rng=None) -> tuple[str, list[str]]:
+    """Build a selection prompt from a live board. Returns (prompt, legal_sans)."""
+    legal = [board.san(m) for m in board.legal_moves]
+    shuffled = legal[:]
+    (rng or random).shuffle(shuffled)
+
+    temp = board.copy()
+    hist = []
+    stack = list(temp.move_stack)
+    temp.reset()
+    for mv in stack:
+        hist.append(temp.san(mv))
+        temp.push(mv)
+
+    return build_selection_prompt(board, hist[-HISTORY_PLIES:], shuffled), legal
 
 
 def count_lines(path: Path) -> int:

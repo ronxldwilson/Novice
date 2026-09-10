@@ -12,6 +12,8 @@ import chess.engine
 import mlx_lm
 from mlx_lm.sample_utils import make_sampler
 
+from utils import selection_prompt_for_board
+
 MODEL = "Qwen/Qwen2.5-0.5B"
 ADAPTERS_BASIC = Path(__file__).parent.parent / "adapters" / "basic"
 ADAPTERS_ANNOTATED = Path(__file__).parent.parent / "adapters" / "annotated"
@@ -83,27 +85,29 @@ def get_model_move_basic(model, tokenizer, board: chess.Board, temperature: floa
 
 
 def get_model_move_selection(model, tokenizer, board: chess.Board, temperature: float) -> tuple[chess.Move, bool]:
-    """Selection mode: present all legal moves, model picks the best. Returns (move, was_legal)."""
-    history = board_to_move_history(board)
-    side = "White" if board.turn == chess.WHITE else "Black"
+    """Selection mode: present all legal moves, model picks the best.
 
-    legal_moves = [board.san(m) for m in board.legal_moves]
-    random.shuffle(legal_moves)
-    legal_str = ", ".join(legal_moves)
+    Uses the same prompt builder and chat template as training, so the model
+    sees at test time exactly the format it was trained on.
+    """
+    prompt, _legal = selection_prompt_for_board(board)
+    text = tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        add_generation_prompt=True,
+        tokenize=False,
+    )
 
-    prompt = f"[Position] {history}\n[Side] {side} to move\n[Legal] {legal_str}\n[Best]"
-    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
+    response = mlx_lm.generate(model, tokenizer, prompt=text, max_tokens=8,
+                               sampler=make_sampler(temp=temperature))
     move_text = response.strip().split()[0].rstrip(".") if response.strip() else ""
 
     try:
-        move = board.parse_san(move_text)
-        return move, True
+        return board.parse_san(move_text), True
     except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError, ValueError):
         pass
 
     for legal_move in board.legal_moves:
-        san = board.san(legal_move)
-        if len(move_text) >= 2 and san.startswith(move_text[:2]):
+        if len(move_text) >= 2 and board.san(legal_move).startswith(move_text[:2]):
             return legal_move, False
 
     return random.choice(list(board.legal_moves)), False

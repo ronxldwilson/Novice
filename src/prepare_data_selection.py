@@ -1,20 +1,22 @@
-"""Prepare training data in move-selection format.
+"""Prepare move-selection training data.
 
-The model receives ALL legal moves and learns to select the best one — like a
-chess UI showing which moves are available. At inference time python-chess
-provides the legal moves, so no engine is needed as a crutch.
+The model is shown the board and every legal move, and picks one — like a chess
+UI highlighting available squares. Legal moves come from `python-chess`, so no
+engine is needed at inference time.
 
-Training format:
-    [Position] 1.e4 e5 2.Nf3 Nc6
-    [Side] White to move
-    [Legal] d3, Bc4, Nc3, Bb5, d4, Be2, ...
-    [Best] Bb5
+Design decisions that matter for a 0.5B model:
 
-Two label sources:
-  --label played     (default) the move actually played by a 2000+ Elo player.
-                     Free — no engine calls, so millions of examples in minutes.
-  --label stockfish  Stockfish's best move at --depth. Higher quality labels but
-                     ~0.25s per position.
+* **FEN in the prompt.** Without it the model must mentally replay the whole game
+  to know where the pieces are. FEN states the board directly for ~30 tokens.
+* **prompt/completion format.** Combined with `--mask-prompt` at training time,
+  loss is computed only on the chosen move rather than spread across the legal
+  move list. Nearly all gradient goes into the actual decision.
+* **Length filtering.** Truncation cuts the *end* of a sequence, which is where
+  the label lives. Over-long examples are dropped rather than silently corrupted.
+
+Label sources:
+  --label played     (default) the move a 2000+ Elo player actually made. Free.
+  --label stockfish  Stockfish's best move at --depth. Better labels, ~0.25s/position.
 """
 
 import argparse
@@ -27,24 +29,19 @@ from pathlib import Path
 import chess
 import chess.engine
 
-from utils import count_lines, fmt_num, fmt_time, log, progress_bar
+from utils import build_selection_prompt, count_lines, fmt_num, fmt_time, log, progress_bar
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 STOCKFISH_PATH = "stockfish"
 STOCKFISH_DEPTH = 12
-POSITIONS_PER_GAME = 10
-TRAIN_SPLIT = 0.95
-CHECKPOINT_SIZE = 20000
+POSITIONS_PER_GAME = 8
+HISTORY_PLIES = 12
+TRAIN_SPLIT = 0.97
+FLUSH_EVERY = 20000
 
-
-def move_history_to_san(moves: list[str], upto: int) -> str:
-    parts = []
-    for i in range(upto):
-        if i % 2 == 0:
-            parts.append(f"{i // 2 + 1}.{moves[i]}")
-        else:
-            parts.append(moves[i])
-    return " ".join(parts)
+# Rough token budget. Measured against the Qwen tokenizer: ~3.6 chars/token for
+# this content, plus ~25 tokens of chat-template overhead.
+MAX_PROMPT_CHARS = 1500
 
 
 def stream_games(path: Path, max_games: int):
@@ -64,20 +61,22 @@ def process_game(
     positions_per_game: int,
     engine: chess.engine.SimpleEngine | None,
     depth: int,
+    rng: random.Random,
 ) -> list[dict]:
-    """Replay a game and emit move-selection examples at sampled positions."""
+    """Replay a game and emit selection examples at sampled positions."""
     moves = game["moves"]
     total = len(moves)
-    if total < 2:
+    if total < 4:
         return []
 
     if total <= positions_per_game:
         selected = set(range(total))
     else:
-        selected = set(random.sample(range(total), positions_per_game))
+        selected = set(rng.sample(range(total), positions_per_game))
 
     board = chess.Board()
     examples = []
+    history: list[str] = []
 
     for i, played_san in enumerate(moves):
         if i in selected and not board.is_game_over():
@@ -95,22 +94,17 @@ def process_game(
                     label = played_san
 
                 if label in legal:
-                    random.shuffle(legal)
-                    history = move_history_to_san(moves, i)
-                    side = "White" if board.turn == chess.WHITE else "Black"
-                    examples.append({
-                        "text": (
-                            f"[Position] {history}\n"
-                            f"[Side] {side} to move\n"
-                            f"[Legal] {', '.join(legal)}\n"
-                            f"[Best] {label}"
-                        )
-                    })
+                    shuffled = legal[:]
+                    rng.shuffle(shuffled)
+                    prompt = build_selection_prompt(board, history[-HISTORY_PLIES:], shuffled)
+                    if len(prompt) <= MAX_PROMPT_CHARS:
+                        examples.append({"prompt": prompt, "completion": label})
 
         try:
             board.push(board.parse_san(played_san))
         except ValueError:
             break
+        history.append(played_san)
 
     return examples
 
@@ -121,11 +115,14 @@ def main():
     parser.add_argument("--label", choices=["played", "stockfish"], default="played")
     parser.add_argument("--depth", type=int, default=STOCKFISH_DEPTH)
     parser.add_argument("--positions-per-game", type=int, default=POSITIONS_PER_GAME)
+    parser.add_argument("--out-prefix", default="selection")
+    parser.add_argument("--max-examples", type=int, default=400_000,
+                        help="Cap total examples to keep training inside RAM")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     print("=" * 60, flush=True)
-    log("NOVICE — MOVE-SELECTION DATA PREPARATION")
+    log("NOVICE — MOVE-SELECTION DATA (v2: FEN + masked completion)")
     print("=" * 60, flush=True)
 
     games_path = DATA_DIR / "games_checkpoint.jsonl"
@@ -135,9 +132,9 @@ def main():
 
     total_games = min(args.max_games, count_lines(games_path))
     log(f"Source:   {fmt_num(total_games)} games")
-    log(f"Label:    {args.label}" + (f" (depth {args.depth})" if args.label == "stockfish" else " (move played in game)"))
+    log(f"Label:    {args.label}")
     log(f"Sampling: {args.positions_per_game} positions/game")
-    log(f"Estimate: ~{fmt_num(total_games * args.positions_per_game)} examples")
+    log(f"Cap:      {fmt_num(args.max_examples)} examples")
 
     engine = None
     if args.label == "stockfish":
@@ -151,35 +148,39 @@ def main():
 
     print("─" * 60, flush=True)
 
-    random.seed(args.seed)
-    checkpoint_path = DATA_DIR / "selection_checkpoint.jsonl"
-    checkpoint_path.unlink(missing_ok=True)
+    rng = random.Random(args.seed)
+    raw_path = DATA_DIR / f"{args.out_prefix}_raw.jsonl"
+    raw_path.unlink(missing_ok=True)
 
     start = time.time()
     written = 0
     buffer = []
+    stop = False
 
-    with open(checkpoint_path, "a") as out:
+    with open(raw_path, "a") as out:
         for i, game in enumerate(stream_games(games_path, total_games)):
-            buffer.extend(process_game(game, args.positions_per_game, engine, args.depth))
+            buffer.extend(process_game(game, args.positions_per_game, engine, args.depth, rng))
 
-            if len(buffer) >= CHECKPOINT_SIZE:
+            if len(buffer) >= FLUSH_EVERY:
                 for ex in buffer:
                     out.write(json.dumps(ex) + "\n")
                 written += len(buffer)
                 buffer = []
+                if written >= args.max_examples:
+                    log(f"  Reached example cap at game {fmt_num(i + 1)}")
+                    stop = True
 
-            if (i + 1) % 10_000 == 0:
+            if (i + 1) % 10_000 == 0 or stop:
                 elapsed = time.time() - start
                 rate = (i + 1) / elapsed
-                remaining = total_games - i - 1
                 log(
-                    f"  {progress_bar(i + 1, total_games)}  "
-                    f"{fmt_num(i + 1)}/{fmt_num(total_games)} games  |  "
+                    f"  {progress_bar(written, args.max_examples)}  "
+                    f"{fmt_num(i + 1)} games  |  "
                     f"{fmt_num(written + len(buffer))} examples  |  "
-                    f"{rate:.0f} games/s  |  "
-                    f"ETA: {fmt_time(remaining / rate) if rate > 0 else '...'}"
+                    f"{rate:.0f} games/s"
                 )
+            if stop:
+                break
 
         for ex in buffer:
             out.write(json.dumps(ex) + "\n")
@@ -190,38 +191,38 @@ def main():
 
     log(f"Generated {fmt_num(written)} examples in {fmt_time(time.time() - start)}")
 
-    # Shuffle line indices only, then stream-split to keep memory flat
+    # Shuffle line indices only, then stream-split, so memory stays flat.
     print("─" * 60, flush=True)
-    log(f"Shuffling and splitting (seed={args.seed})...")
+    log("Shuffling and splitting...")
     indices = list(range(written))
-    random.shuffle(indices)
+    rng.shuffle(indices)
     split = int(written * TRAIN_SPLIT)
     train_idx = set(indices[:split])
 
-    train_path = DATA_DIR / "train_selection.jsonl"
-    valid_path = DATA_DIR / "valid_selection.jsonl"
+    train_path = DATA_DIR / f"train_{args.out_prefix}.jsonl"
+    valid_path = DATA_DIR / f"valid_{args.out_prefix}.jsonl"
 
-    sample_text = None
-    with open(checkpoint_path) as inp, \
-         open(train_path, "w") as tf, \
-         open(valid_path, "w") as vf:
+    first = None
+    with open(raw_path) as inp, open(train_path, "w") as tf, open(valid_path, "w") as vf:
         for i, line in enumerate(inp):
             (tf if i in train_idx else vf).write(line)
             if i == 0:
-                sample_text = json.loads(line)["text"]
+                first = json.loads(line)
+
+    raw_path.unlink(missing_ok=True)
 
     print("─" * 60, flush=True)
     log("SAMPLE EXAMPLE:")
     print("─" * 60, flush=True)
-    print(sample_text, flush=True)
+    print(first["prompt"], flush=True)
+    print(f"--> completion: {first['completion']}", flush=True)
 
     print("=" * 60, flush=True)
     log("ALL DONE!")
-    log(f"  Train: {fmt_num(split)} examples")
+    log(f"  Train: {fmt_num(split)} examples ({train_path.stat().st_size / 1e6:.0f} MB)")
     log(f"  Valid: {fmt_num(written - split)} examples")
-    log(f"  Files: data/train_selection.jsonl, data/valid_selection.jsonl")
     print("=" * 60, flush=True)
-    log("Next: uv run python src/train.py --selection")
+    log(f"Next: uv run python src/train.py --selection --mask-prompt")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ import chess
 import mlx_lm
 from mlx_lm.sample_utils import make_sampler
 
+from utils import build_selection_prompt
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 LOCAL_MODEL = Path(__file__).parent.parent / "models" / "Qwen2.5-0.5B"
 MODEL = "Qwen/Qwen2.5-0.5B"
@@ -71,6 +73,7 @@ def sample_positions(n: int, seed: int) -> list[dict]:
 
             positions.append({
                 "history": move_history(moves, i),
+                "recent": moves[max(0, i - 12):i],
                 "side": "White" if board.turn == chess.WHITE else "Black",
                 "legal": legal,
                 "played": moves[i],
@@ -141,7 +144,16 @@ def p_continuation(p, rng):
     return p["history"]
 
 
+def p_v2(p, rng):
+    """The trained selection format: FEN + recent history + legal moves, chat-templated."""
+    legal = p["legal"][:]
+    rng.shuffle(legal)
+    board = chess.Board(p["fen"])
+    return build_selection_prompt(board, p["recent"], legal)
+
+
 PROMPTS = {
+    "v2_selection": p_v2,
     "bare": p_bare,
     "instructed": p_instructed,
     "numbered": p_numbered,
@@ -199,6 +211,11 @@ def main():
 
         for p in positions:
             prompt = builder(p, rng)
+            if name == "v2_selection":
+                prompt = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    add_generation_prompt=True, tokenize=False,
+                )
             out = mlx_lm.generate(model, tokenizer, prompt=prompt,
                                   max_tokens=8, sampler=sampler)
             tok = first_token(out)

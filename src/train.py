@@ -27,10 +27,13 @@ def main():
     parser.add_argument("--steps-per-eval", type=int, default=200)
     parser.add_argument("--max-seq-length", type=int, default=512)
     parser.add_argument("--save-every", type=int, default=1000)
+    parser.add_argument("--mask-prompt", action="store_true",
+                        help="Compute loss only on the completion (prompt/completion data)")
+    parser.add_argument("--resume", default=None, help="Adapter file to resume from")
     args = parser.parse_args()
 
     if args.selection:
-        suffix = "_selection_small" if args.small else "_selection"
+        suffix = "_selection"
     elif args.annotated:
         suffix = "_annotated"
     elif args.small:
@@ -96,6 +99,10 @@ def main():
         "--save-every", str(args.save_every),
         "-c", str(config_path),
     ]
+    if args.mask_prompt:
+        cmd.append("--mask-prompt")
+    if args.resume:
+        cmd += ["--resume-adapter-file", args.resume]
 
     modes = {"_selection": "selection (legal moves)", "_annotated": "annotated (Stockfish-guided)"}
     mode = modes.get(suffix, "basic (raw moves)")
