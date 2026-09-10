@@ -21,11 +21,33 @@ Qwen 2.5 0.5B + LoRA (rank 32, all 24 layers), masked completion loss,
 | untrained (control) | 5.0% | 17.5% | 0.155 | 1.2× — chance |
 | 1000 iters | 11.7% | 30.0% | 0.268 | 2.7× |
 | 3000 iters | 15.0% | 36.7% | 0.297 | 3.5× |
+| 6000 iters | 11.7% | 23.3% | 0.245 | 2.7× |
 
 Measured on 60 held-out positions each, constrained ranking, greedy.
 
-The untrained control runs through the *identical* harness, so the gain cannot be
-attributed to scaffolding.
+The untrained control runs through the *identical* harness, so the gain over
+chance cannot be attributed to scaffolding.
+
+**Caveat on the last two rows:** n=60 gives roughly ±9pp, so 15.0% (9/60) and
+11.7% (7/60) are not distinguishable. The honest reading is that human-label
+training rises steeply to ~1000 iters and then **plateaus around 12–15%**, not
+that it regressed. This plateau is the motivation for stage 2 — if more of the
+same data stops helping, the labels themselves are the ceiling. Human moves at
+2000 Elo contain blunders and stylistic noise; Stockfish labels do not.
+
+### Play strength at the plateau
+
+The 3000-iter model, constrained ranking, vs Stockfish:
+
+| Opponent | Result | Notes |
+|---|---|---|
+| UCI_Elo 1320 | 0W–2L | 100% legal, 38 moves avg |
+| UCI_Elo 1320 + SEE filter | 0W–2L | survived **102 moves** as White vs 38 |
+| depth-1 Stockfish + SEE | 0W–2L | 36, 37 moves |
+
+Not yet beating Stockfish at any setting. The SEE filter clearly extends
+survival — the model stops shedding material in the opening — but a blunder
+filter cannot manufacture a plan.
 
 ---
 

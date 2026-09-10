@@ -44,16 +44,21 @@ FLUSH_EVERY = 20000
 MAX_PROMPT_CHARS = 1500
 
 
-def stream_games(path: Path, max_games: int):
+def stream_games(path: Path, max_games: int, skip: int = 0):
     count = 0
+    seen = 0
     with open(path) as f:
         for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            seen += 1
+            if seen <= skip:
+                continue
             if count >= max_games:
                 break
-            line = line.strip()
-            if line:
-                yield json.loads(line)
-                count += 1
+            yield json.loads(line)
+            count += 1
 
 
 def process_game(
@@ -116,6 +121,8 @@ def main():
     parser.add_argument("--depth", type=int, default=STOCKFISH_DEPTH)
     parser.add_argument("--positions-per-game", type=int, default=POSITIONS_PER_GAME)
     parser.add_argument("--out-prefix", default="selection")
+    parser.add_argument("--skip-games", type=int, default=0,
+                        help="Skip this many games first, to build a disjoint set")
     parser.add_argument("--max-examples", type=int, default=400_000,
                         help="Cap total examples to keep training inside RAM")
     parser.add_argument("--seed", type=int, default=42)
@@ -158,7 +165,7 @@ def main():
     stop = False
 
     with open(raw_path, "a") as out:
-        for i, game in enumerate(stream_games(games_path, total_games)):
+        for i, game in enumerate(stream_games(games_path, total_games, args.skip_games)):
             buffer.extend(process_game(game, args.positions_per_game, engine, args.depth, rng))
 
             if len(buffer) >= FLUSH_EVERY:

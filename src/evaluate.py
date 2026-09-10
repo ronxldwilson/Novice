@@ -174,6 +174,7 @@ def play_game(
     mode: str,
     eval_engine: chess.engine.SimpleEngine | None,
     temperature: float,
+    sf_limit: chess.engine.Limit,
     max_moves: int = 200,
 ) -> dict:
     """Play one game between the model and Stockfish. Returns game stats."""
@@ -203,8 +204,7 @@ def play_game(
             if was_legal:
                 legal_moves += 1
         else:
-            result = sf_engine.play(board, chess.engine.Limit(time=0.1))
-            move = result.move
+            move = sf_engine.play(board, sf_limit).move
 
         board.push(move)
 
@@ -312,6 +312,11 @@ def main():
                         help="Score every legal move and take argmax (always legal)")
     parser.add_argument("--safe", action="store_true",
                         help="Constrained ranking plus SEE blunder filter")
+    parser.add_argument("--sf-depth", type=int, default=None,
+                        help="Cap Stockfish search depth instead of using UCI_Elo. "
+                             "Depth 1-3 are genuinely weak opponents.")
+    parser.add_argument("--sf-time", type=float, default=0.1,
+                        help="Stockfish seconds per move when using UCI_Elo")
     parser.add_argument("--adapter-path", default=None)
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--elo-levels", type=int, nargs="+", default=ELO_LEVELS)
@@ -373,12 +378,17 @@ def main():
         log(f"Playing against Stockfish Elo {elo}")
         print("─" * 80, flush=True)
 
-        sf_engine.configure({
-            "UCI_LimitStrength": True,
-            "UCI_Elo": elo,
-            "Threads": 1,
-            "Hash": 64,
-        })
+        if args.sf_depth:
+            sf_engine.configure({"UCI_LimitStrength": False, "Threads": 1, "Hash": 64})
+            sf_limit = chess.engine.Limit(depth=args.sf_depth)
+        else:
+            sf_engine.configure({
+                "UCI_LimitStrength": True,
+                "UCI_Elo": elo,
+                "Threads": 1,
+                "Hash": 64,
+            })
+            sf_limit = chess.engine.Limit(time=args.sf_time)
 
         level_results = []
 
@@ -391,7 +401,7 @@ def main():
                 result = play_game(
                     model, tokenizer, sf_engine, elo,
                     model_is_white, mode, eval_engine,
-                    args.temperature,
+                    args.temperature, sf_limit,
                 )
                 game_time = time.time() - game_start
 
