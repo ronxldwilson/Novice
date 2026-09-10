@@ -1,0 +1,18 @@
+# Data
+data/*.json
+data/*.jsonl
+data/mlx*/
+
+# Model adapters
+adapters/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# uv
+uv.lock
+
+# OS
+.DS_Store
