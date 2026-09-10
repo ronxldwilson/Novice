@@ -12,6 +12,20 @@ This project trains [Qwen 2.5 0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B) to
 
 **Selection is the mode that matters.** Annotated mode scores 100% wins against Stockfish at max strength, but that result is an artifact: it is handed Stockfish's own top-3 candidates and learns only to copy candidate #1. Remove the engine and it collapses to baseline. Selection mode gives the model scaffolding that is free to compute and contains no answer, so any skill it shows is its own.
 
+### Constrained move ranking
+
+At inference the model does not generate a move and hope it parses. Instead every
+legal move is enumerated and scored, and the argmax is played:
+
+```
+score(move) = mean log P(move tokens | prompt)
+```
+
+Illegal output becomes structurally impossible, and the model's full distribution
+is used rather than a single sampled guess. The prompt dominates the sequence
+(~250 tokens against ~3 for a move), so it is encoded once into a KV cache and
+reused across candidates — single-token moves cost no extra forward pass at all.
+
 ### The metric that matters: match%, not legal%
 
 Two separable problems:
@@ -21,7 +35,16 @@ Two separable problems:
 | Producing a *legal* move | Format/scaffolding — free |
 | Producing a *good* move | Training — the actual hard part |
 
-In selection mode legal% reads ~100% for any model, trained or not, so it is a vanity metric. The real measure is **match%** — how often the model picks the move a 2000+ Elo human actually played. Random choice off the legal list scores ~2.9%.
+In selection mode legal% reads ~100% for any model, trained or not, so it is a vanity metric. The real measure is **match%** — how often the model picks the move a 2000+ Elo human actually played. Random choice off the legal list scores ~4%.
+
+Measure it directly, without playing games:
+
+```bash
+uv run python src/eval_match.py --adapter-path adapters/selection --n 200
+```
+
+Reports top1 / top3 / MRR against the human move, plus the random baseline and
+the lift over it.
 
 ## Requirements
 
