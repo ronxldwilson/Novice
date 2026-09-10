@@ -10,6 +10,7 @@ from pathlib import Path
 import chess
 import chess.engine
 import mlx_lm
+from mlx_lm.sample_utils import make_sampler
 
 MODEL = "Qwen/Qwen2.5-0.5B"
 ADAPTERS_BASIC = Path(__file__).parent.parent / "adapters" / "basic"
@@ -18,7 +19,7 @@ LOCAL_MODEL = Path(__file__).parent.parent / "models" / "Qwen2.5-0.5B"
 STOCKFISH_PATH = "stockfish"
 RESULTS_DIR = Path(__file__).parent.parent / "results"
 
-ELO_LEVELS = [800, 1000, 1200, 1500, 1800]
+ELO_LEVELS = [1320, 1500, 1800, 2000, 2200]
 GAMES_PER_LEVEL = 20
 
 
@@ -63,7 +64,7 @@ def get_model_move_basic(model, tokenizer, board: chess.Board, temperature: floa
     else:
         prompt = history
 
-    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, temp=temperature)
+    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
     move_text = response.strip().split()[0].rstrip(".") if response.strip() else ""
 
     try:
@@ -115,7 +116,7 @@ def get_model_move_annotated(model, tokenizer, board: chess.Board, temperature: 
         pass
 
     prompt = f"[Position] {history}\n[Eval] {eval_str}\n[Side] {side} to move\n[Candidates] {candidates_str}\n[Best]"
-    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, temp=temperature)
+    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
     move_text = response.strip().split()[0].rstrip(".") if response.strip() else ""
 
     try:
@@ -337,27 +338,45 @@ def main():
             model_is_white = i < args.games_per_level // 2
             games_played += 1
 
-            game_start = time.time()
-            result = play_game(
-                model, tokenizer, sf_engine, elo,
-                model_is_white, args.annotated, eval_engine,
-                args.temperature,
-            )
-            game_time = time.time() - game_start
+            try:
+                game_start = time.time()
+                result = play_game(
+                    model, tokenizer, sf_engine, elo,
+                    model_is_white, args.annotated, eval_engine,
+                    args.temperature,
+                )
+                game_time = time.time() - game_start
 
-            level_results.append(result)
+                level_results.append(result)
 
-            color = "W" if model_is_white else "B"
-            legal_pct = result["legal_rate"] * 100
-            elapsed_total = time.time() - overall_start
-            eta = elapsed_total / games_played * (total_games - games_played) if games_played > 0 else 0
+                color = "W" if model_is_white else "B"
+                legal_pct = result["legal_rate"] * 100
+                elapsed_total = time.time() - overall_start
+                eta = elapsed_total / games_played * (total_games - games_played) if games_played > 0 else 0
 
-            log(
-                f"  Game {i + 1}/{args.games_per_level} [{color}]: {result['result']:>4}  "
-                f"({result['termination']}, {result['total_moves']} moves, "
-                f"legal: {legal_pct:.0f}%, {game_time:.1f}s)  "
-                f"[{games_played}/{total_games} total, ETA: {fmt_time(eta)}]"
-            )
+                log(
+                    f"  Game {i + 1}/{args.games_per_level} [{color}]: {result['result']:>4}  "
+                    f"({result['termination']}, {result['total_moves']} moves, "
+                    f"legal: {legal_pct:.0f}%, {game_time:.1f}s)  "
+                    f"[{games_played}/{total_games} total, ETA: {fmt_time(eta)}]"
+                )
+            except Exception as e:
+                color = "W" if model_is_white else "B"
+                log(f"  Game {i + 1}/{args.games_per_level} [{color}]: ERROR — {type(e).__name__}: {e}")
+                level_results.append({
+                    "sf_elo": elo,
+                    "model_color": "white" if model_is_white else "black",
+                    "result": "loss",
+                    "board_result": "*",
+                    "total_moves": 0,
+                    "model_moves": 0,
+                    "legal_moves": 0,
+                    "legal_rate": 0,
+                    "avg_move_time": 0,
+                    "pgn": "",
+                    "termination": "error",
+                    "error": str(e),
+                })
 
         all_results[elo] = level_results
 

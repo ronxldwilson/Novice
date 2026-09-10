@@ -169,6 +169,18 @@ chess/
 
 4. **Inference** — During play, the annotated model receives the same structured format it was trained on. Stockfish provides the real-time position evaluation and candidates, and the model selects the best move — combining engine analysis with learned pattern recognition.
 
+## Baseline Results
+
+Before any fine-tuning, the base Qwen 2.5 0.5B was evaluated against Stockfish at various Elo levels (10 games each):
+
+| Stockfish Elo | W | D | L | Win% | Legal Move % |
+|---------------|---|---|---|------|--------------|
+| 1320          | 0 | 0 | 10 | 0%  | 30.9%        |
+| 1500          | 0 | 0 | 10 | 0%  | 22.7%        |
+| 1800          | 0 | 0 | 10 | 0%  | 29.7%        |
+
+**Effective Elo: ~0.** The base model has no chess knowledge — it generates legal moves less than 30% of the time (the rest are random fallbacks), and gets checkmated in ~40 moves every game. This establishes a clear floor: any improvement after fine-tuning is directly attributable to the training.
+
 ## Performance Notes
 
 - **16GB Mac**: Qwen 2.5 0.5B with LoRA fits comfortably. Batch size 4 should work; reduce to 2 if you see memory pressure.

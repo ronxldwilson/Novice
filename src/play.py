@@ -6,6 +6,7 @@ from pathlib import Path
 import chess
 import chess.engine
 import mlx_lm
+from mlx_lm.sample_utils import make_sampler
 
 
 MODEL = "Qwen/Qwen2.5-0.5B"
@@ -43,7 +44,7 @@ def get_model_move_basic(model, tokenizer, board: chess.Board, temperature: floa
     else:
         prompt = history
 
-    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, temp=temperature)
+    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
     move_text = response.strip().split()[0].rstrip(".")
 
     return resolve_move(board, move_text), ""
@@ -86,7 +87,7 @@ def get_model_move_annotated(model, tokenizer, board: chess.Board, temperature: 
 
     prompt = f"[Position] {history}\n[Eval] {eval_str}\n[Side] {side} to move\n[Candidates] {candidates_str}\n[Best]"
 
-    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, temp=temperature)
+    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
     move_text = response.strip().split()[0].rstrip(".")
 
     reasoning = f"Eval: {eval_str} | Candidates: {candidates_str}"
