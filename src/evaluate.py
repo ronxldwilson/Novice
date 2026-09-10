@@ -15,6 +15,7 @@ from mlx_lm.sample_utils import make_sampler
 MODEL = "Qwen/Qwen2.5-0.5B"
 ADAPTERS_BASIC = Path(__file__).parent.parent / "adapters" / "basic"
 ADAPTERS_ANNOTATED = Path(__file__).parent.parent / "adapters" / "annotated"
+ADAPTERS_SELECTION = Path(__file__).parent.parent / "adapters" / "selection"
 LOCAL_MODEL = Path(__file__).parent.parent / "models" / "Qwen2.5-0.5B"
 STOCKFISH_PATH = "stockfish"
 RESULTS_DIR = Path(__file__).parent.parent / "results"
@@ -64,6 +65,33 @@ def get_model_move_basic(model, tokenizer, board: chess.Board, temperature: floa
     else:
         prompt = history
 
+    response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
+    move_text = response.strip().split()[0].rstrip(".") if response.strip() else ""
+
+    try:
+        move = board.parse_san(move_text)
+        return move, True
+    except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError, ValueError):
+        pass
+
+    for legal_move in board.legal_moves:
+        san = board.san(legal_move)
+        if len(move_text) >= 2 and san.startswith(move_text[:2]):
+            return legal_move, False
+
+    return random.choice(list(board.legal_moves)), False
+
+
+def get_model_move_selection(model, tokenizer, board: chess.Board, temperature: float) -> tuple[chess.Move, bool]:
+    """Selection mode: present all legal moves, model picks the best. Returns (move, was_legal)."""
+    history = board_to_move_history(board)
+    side = "White" if board.turn == chess.WHITE else "Black"
+
+    legal_moves = [board.san(m) for m in board.legal_moves]
+    random.shuffle(legal_moves)
+    legal_str = ", ".join(legal_moves)
+
+    prompt = f"[Position] {history}\n[Side] {side} to move\n[Legal] {legal_str}\n[Best]"
     response = mlx_lm.generate(model, tokenizer, prompt=prompt, max_tokens=10, sampler=make_sampler(temp=temperature))
     move_text = response.strip().split()[0].rstrip(".") if response.strip() else ""
 
@@ -138,7 +166,7 @@ def play_game(
     sf_engine: chess.engine.SimpleEngine,
     sf_elo: int,
     model_is_white: bool,
-    annotated: bool,
+    mode: str,
     eval_engine: chess.engine.SimpleEngine | None,
     temperature: float,
     max_moves: int = 200,
@@ -154,7 +182,9 @@ def play_game(
 
         if is_model_turn:
             t0 = time.time()
-            if annotated and eval_engine:
+            if mode == "selection":
+                move, was_legal = get_model_move_selection(model, tokenizer, board, temperature)
+            elif mode == "annotated" and eval_engine:
                 move, was_legal = get_model_move_annotated(model, tokenizer, board, temperature, eval_engine)
             else:
                 move, was_legal = get_model_move_basic(model, tokenizer, board, temperature)
@@ -268,6 +298,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate chess SLM against Stockfish")
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--annotated", action="store_true", help="Use annotated model")
+    parser.add_argument("--selection", action="store_true", help="Use selection model (legal moves)")
     parser.add_argument("--adapter-path", default=None)
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--elo-levels", type=int, nargs="+", default=ELO_LEVELS)
@@ -282,6 +313,8 @@ def main():
     # Load model
     if args.adapter_path:
         adapter_path = Path(args.adapter_path)
+    elif args.selection:
+        adapter_path = ADAPTERS_SELECTION
     elif args.annotated:
         adapter_path = ADAPTERS_ANNOTATED
     else:
@@ -308,7 +341,7 @@ def main():
 
     random.seed(args.seed)
 
-    mode = "annotated" if args.annotated else "basic"
+    mode = "selection" if args.selection else "annotated" if args.annotated else "basic"
     log(f"Mode: {mode}")
     log(f"Elo levels: {args.elo_levels}")
     log(f"Games per level: {args.games_per_level} ({args.games_per_level // 2} as white, {args.games_per_level // 2} as black)")
@@ -342,7 +375,7 @@ def main():
                 game_start = time.time()
                 result = play_game(
                     model, tokenizer, sf_engine, elo,
-                    model_is_white, args.annotated, eval_engine,
+                    model_is_white, mode, eval_engine,
                     args.temperature,
                 )
                 game_time = time.time() - game_start

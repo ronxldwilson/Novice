@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--model", default=MODEL, help="HuggingFace model ID")
     parser.add_argument("--annotated", action="store_true", help="Use Stockfish-annotated data")
     parser.add_argument("--small", action="store_true", help="Use subsampled basic data (500K examples)")
+    parser.add_argument("--selection", action="store_true", help="Use move-selection data (legal moves format)")
     parser.add_argument("--iters", type=int, default=5000, help="Training iterations")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lora-rank", type=int, default=16)
@@ -28,7 +29,9 @@ def main():
     parser.add_argument("--save-every", type=int, default=1000)
     args = parser.parse_args()
 
-    if args.annotated:
+    if args.selection:
+        suffix = "_selection_small" if args.small else "_selection"
+    elif args.annotated:
         suffix = "_annotated"
     elif args.small:
         suffix = "_small"
@@ -38,12 +41,19 @@ def main():
     valid_path = DATA_DIR / f"valid{suffix}.jsonl"
 
     if not train_path.exists() or not valid_path.exists():
-        script = "prepare_data_annotated.py" if args.annotated else "prepare_data.py"
+        scripts = {"_selection": "prepare_data_selection.py", "_annotated": "prepare_data_annotated.py"}
+        script = scripts.get(suffix, "prepare_data.py")
         print(f"Training data not found at {train_path}")
         print(f"Run: uv run python src/{script}")
         sys.exit(1)
 
-    adapter_dir = OUTPUT_DIR / ("annotated" if args.annotated else "basic")
+    if args.selection:
+        adapter_name = "selection"
+    elif args.annotated:
+        adapter_name = "annotated"
+    else:
+        adapter_name = "basic"
+    adapter_dir = OUTPUT_DIR / adapter_name
     adapter_dir.mkdir(parents=True, exist_ok=True)
 
     # mlx_lm expects train.jsonl and valid.jsonl in the data dir
@@ -87,7 +97,8 @@ def main():
         "-c", str(config_path),
     ]
 
-    mode = "annotated (Stockfish-guided)" if args.annotated else "basic (raw moves)"
+    modes = {"_selection": "selection (legal moves)", "_annotated": "annotated (Stockfish-guided)"}
+    mode = modes.get(suffix, "basic (raw moves)")
     train_size_mb = train_path.stat().st_size / (1024 * 1024)
     print(f"Starting LoRA fine-tuning on {model_path}")
     print(f"Mode: {mode}")
