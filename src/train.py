@@ -30,9 +30,15 @@ def main():
     parser.add_argument("--mask-prompt", action="store_true",
                         help="Compute loss only on the completion (prompt/completion data)")
     parser.add_argument("--resume", default=None, help="Adapter file to resume from")
+    parser.add_argument("--data-suffix", default=None,
+                        help="Explicit dataset suffix, e.g. _sfsel for train_sfsel.jsonl")
+    parser.add_argument("--adapter-name", default=None,
+                        help="Subdirectory under adapters/ to write to")
     args = parser.parse_args()
 
-    if args.selection:
+    if args.data_suffix:
+        suffix = args.data_suffix
+    elif args.selection:
         suffix = "_selection"
     elif args.annotated:
         suffix = "_annotated"
@@ -50,7 +56,9 @@ def main():
         print(f"Run: uv run python src/{script}")
         sys.exit(1)
 
-    if args.selection:
+    if args.adapter_name:
+        adapter_name = args.adapter_name
+    elif args.selection:
         adapter_name = "selection"
     elif args.annotated:
         adapter_name = "annotated"
