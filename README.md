@@ -1,4 +1,4 @@
-# Chess SLM
+# Novice
 
 Fine-tune a small language model to play chess, using Apple Silicon (MLX) for fast local training and inference.
 

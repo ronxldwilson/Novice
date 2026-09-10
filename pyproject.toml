@@ -1,5 +1,5 @@
 [project]
-name = "chess-slm"
+name = "novice"
 version = "0.1.0"
 description = "Fine-tune a small language model to play chess"
 requires-python = ">=3.11"
