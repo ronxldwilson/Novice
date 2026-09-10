@@ -10,4 +10,5 @@ dependencies = [
     "zstandard>=0.23.0",
     "requests>=2.32.0",
     "huggingface_hub>=0.25.0",
+    "pyyaml>=6.0.3",
 ]

@@ -181,9 +181,28 @@ Before any fine-tuning, the base Qwen 2.5 0.5B was evaluated against Stockfish a
 
 **Effective Elo: ~0.** The base model has no chess knowledge — it generates legal moves less than 30% of the time (the rest are random fallbacks), and gets checkmated in ~40 moves every game. This establishes a clear floor: any improvement after fine-tuning is directly attributable to the training.
 
+## Training Approaches
+
+### v1: Basic (raw moves)
+Trains on next-move prediction from 500K game transcripts (~500K subsampled examples). The model sees a move history and learns to predict the next move. Simple, fast, and teaches the model chess notation and common patterns.
+
+### v1: Annotated (Stockfish-guided)
+Trains on 18.6K Stockfish-annotated positions. Each example includes the position evaluation, top candidate moves with scores, and a context tag (book/good/mistake/blunder). Fewer examples but much richer signal — the model learns *why* moves are good.
+
+These are **two independent models** — each gets its own LoRA adapters on top of the same frozen Qwen 2.5 0.5B base. Results are compared head-to-head against Stockfish at the same Elo levels.
+
+## Roadmap
+
+- [ ] **v2: Stacked training** — Train basic first (learn move patterns and rules), then fine-tune *those* adapters further on annotated data (learn reasoning and evaluation). Like how people learn chess: first learn how pieces move, then learn strategy.
+- [ ] **More annotated data** — Current annotated set is only 18.6K examples from ~2.5K games. Annotating 10K-20K games (~80K-160K examples) should significantly improve the annotated model. Can be run overnight (~6-12 hours).
+- [ ] **Skip shallow evals** — The annotation pipeline runs a shallow Stockfish eval on *every* position for the `[Context]` tag, which roughly doubles annotation time. Making this optional could cut annotation from 6 hours to 3 hours for 10K games.
+- [ ] **Puzzle evaluation** — Add a Lichess puzzle benchmark to test tactical sharpness in addition to full-game Elo.
+- [ ] **Larger base model** — Try Qwen 2.5 1.5B if the 0.5B results are promising. Would need `--batch-size 2` on 16GB.
+- [ ] **Self-play + reinforcement** — Generate games between the model and itself or Stockfish, annotate the results, and train on the outcomes to iteratively improve.
+
 ## Performance Notes
 
-- **16GB Mac**: Qwen 2.5 0.5B with LoRA fits comfortably. Batch size 4 should work; reduce to 2 if you see memory pressure.
-- **Data download**: The Lichess database is large (~25GB compressed). The script streams and filters it without downloading the full file.
-- **Annotation speed**: Stockfish annotation processes ~5-20 games/second depending on depth. 100K games at depth 12 takes roughly 2-5 hours.
-- **Expected strength**: A 0.5B model won't rival engines, but the annotated version should play coherent, legal chess in the 1200-1500 Elo range with good opening play.
+- **16GB Mac**: Qwen 2.5 0.5B with LoRA fits comfortably. Training peaks at ~8GB. The full 37.7M basic training set (8.5GB) is too large to load into memory — use `--small` for the subsampled 500K version.
+- **Data download**: The Lichess database is large (~25GB compressed). The script streams and filters it without downloading the full file. Checkpoints every 5K games for resume support.
+- **Annotation speed**: Stockfish annotation processes ~0.5 games/second at depth 12 (including shallow evals for context tags). 10K games takes ~6 hours.
+- **Training speed**: ~1 iter/sec on M5, 1000 iterations takes ~17 minutes.

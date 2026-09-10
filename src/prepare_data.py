@@ -1,6 +1,11 @@
-"""Download and process Lichess games into training data for chess SLM (basic mode)."""
+"""Download and process Lichess games into training data for chess SLM (basic mode).
+
+Streams games from the checkpoint file and writes training examples directly
+to disk to avoid holding everything in memory.
+"""
 
 import argparse
+import json
 import random
 import time
 from pathlib import Path
@@ -42,6 +47,77 @@ def game_to_training_examples(game: dict) -> list[dict]:
     return examples
 
 
+def stream_games(checkpoint_path: Path, max_games: int):
+    """Yield games one at a time from the checkpoint file."""
+    count = 0
+    with open(checkpoint_path) as f:
+        for line in f:
+            if count >= max_games:
+                break
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+                count += 1
+
+
+def convert_streaming(checkpoint_path: Path, train_path: Path, valid_path: Path, max_games: int, split: float, seed: int):
+    """Convert games to training examples using streaming to keep memory low.
+
+    Writes examples to a temp file, then shuffles by reading line indices
+    and splitting into train/valid.
+    """
+    temp_path = train_path.parent / "examples_temp.jsonl"
+
+    # Pass 1: stream games -> write examples to temp file
+    log("Pass 1: Converting games to training examples (streaming)...")
+    total_examples = 0
+    total_games = 0
+    start = time.time()
+
+    with open(temp_path, "w") as out:
+        for game in stream_games(checkpoint_path, max_games):
+            examples = game_to_training_examples(game)
+            for ex in examples:
+                out.write(json.dumps(ex) + "\n")
+            total_examples += len(examples)
+            total_games += 1
+
+            if total_games % 50000 == 0:
+                elapsed = time.time() - start
+                log(
+                    f"  {progress_bar(total_games, max_games)}  "
+                    f"{fmt_num(total_games)} games  |  "
+                    f"{fmt_num(total_examples)} examples  |  "
+                    f"elapsed: {fmt_time(elapsed)}"
+                )
+
+    elapsed = time.time() - start
+    avg = total_examples / total_games if total_games else 0
+    log(f"  Done: {fmt_num(total_examples)} examples from {fmt_num(total_games)} games ({avg:.0f}/game) in {fmt_time(elapsed)}")
+
+    # Pass 2: shuffle line indices and split (only indices in memory, not content)
+    log(f"Pass 2: Shuffling {fmt_num(total_examples)} examples (indices only, seed={seed})...")
+    random.seed(seed)
+    indices = list(range(total_examples))
+    random.shuffle(indices)
+
+    split_idx = int(total_examples * split)
+    train_indices = set(indices[:split_idx])
+
+    # Pass 3: stream temp file and split into train/valid
+    log(f"Pass 3: Writing train ({fmt_num(split_idx)}) and valid ({fmt_num(total_examples - split_idx)}) files...")
+
+    with open(temp_path) as inp, open(train_path, "w") as train_f, open(valid_path, "w") as valid_f:
+        for i, line in enumerate(inp):
+            if i in train_indices:
+                train_f.write(line)
+            else:
+                valid_f.write(line)
+
+    temp_path.unlink()
+    log(f"  Train: {fmt_num(split_idx)}, Valid: {fmt_num(total_examples - split_idx)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare chess training data (basic)")
     parser.add_argument("--url", default=LICHESS_DB_URL)
@@ -58,61 +134,31 @@ def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     checkpoint_path = DATA_DIR / "games_checkpoint.jsonl"
 
-    # Step 1: Download with checkpointing
-    games = download_games(
+    # Step 1: Download with checkpointing (skips if already done)
+    download_games(
         args.url, args.max_games, args.min_elo,
         checkpoint_path=checkpoint_path,
         chunk_size=args.chunk_size,
     )
 
-    # Step 2: Convert to training examples
+    # Step 2+3: Convert, shuffle, split — all streaming
     print("=" * 60, flush=True)
-    log("CONVERTING TO TRAINING EXAMPLES")
+    log("CONVERTING, SHUFFLING & SPLITTING")
     print("─" * 60, flush=True)
 
-    all_examples = []
-    start = time.time()
-    total_games = len(games)
-
-    for i, game in enumerate(games):
-        all_examples.extend(game_to_training_examples(game))
-
-        if (i + 1) % 50000 == 0 or i + 1 == total_games:
-            elapsed = time.time() - start
-            pbar = progress_bar(i + 1, total_games)
-            log(
-                f"{pbar}  {fmt_num(i + 1)}/{fmt_num(total_games)} games  |  "
-                f"{fmt_num(len(all_examples))} examples so far  |  "
-                f"elapsed: {fmt_time(elapsed)}"
-            )
-
-    avg_examples = len(all_examples) / len(games) if games else 0
-    log(f"Generated {fmt_num(len(all_examples))} training examples ({avg_examples:.0f} per game)")
-
-    # Step 3: Shuffle & split
-    print("=" * 60, flush=True)
-    log("SHUFFLING & SPLITTING DATA")
-    print("─" * 60, flush=True)
-
-    random.seed(args.seed)
-    log(f"Shuffling {fmt_num(len(all_examples))} examples (seed={args.seed})...")
-    random.shuffle(all_examples)
-
-    split_idx = int(len(all_examples) * TRAIN_SPLIT)
-    train = all_examples[:split_idx]
-    valid = all_examples[split_idx:]
-
-    log(f"Split: {TRAIN_SPLIT:.0%} train / {1 - TRAIN_SPLIT:.0%} validation")
-    save_jsonl(train, DATA_DIR / "train.jsonl")
-    save_jsonl(valid, DATA_DIR / "valid.jsonl")
+    convert_streaming(
+        checkpoint_path,
+        DATA_DIR / "train.jsonl",
+        DATA_DIR / "valid.jsonl",
+        args.max_games,
+        TRAIN_SPLIT,
+        args.seed,
+    )
 
     # Summary
     print("=" * 60, flush=True)
     log("ALL DONE!")
-    log(f"  Games:      {fmt_num(len(games))}")
-    log(f"  Train:      {fmt_num(len(train))} examples")
-    log(f"  Validation: {fmt_num(len(valid))} examples")
-    log(f"  Files:      data/train.jsonl, data/valid.jsonl")
+    log(f"  Files: data/train.jsonl, data/valid.jsonl")
     print("=" * 60, flush=True)
     log("Next step: uv run python src/train.py")
 

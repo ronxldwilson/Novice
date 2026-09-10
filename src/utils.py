@@ -47,6 +47,17 @@ def save_jsonl(examples: list[dict], path: Path):
     log(f"Saved {fmt_num(len(examples))} examples to {path.name}")
 
 
+def count_lines(path: Path) -> int:
+    """Count lines in a file without loading it into memory."""
+    if not path.exists():
+        return 0
+    count = 0
+    with open(path, "rb") as f:
+        for _ in f:
+            count += 1
+    return count
+
+
 def load_checkpoint(checkpoint_path: Path) -> list[dict]:
     """Load games from a JSONL checkpoint file."""
     games = []
@@ -80,12 +91,12 @@ def download_games(
     beginning of the database since the PGN stream isn't seekable. Already-saved
     games are loaded instantly; only new games require network.
     """
-    existing = load_checkpoint(checkpoint_path)
-    if len(existing) >= max_games:
-        log(f"Checkpoint already has {fmt_num(len(existing))} games (target: {fmt_num(max_games)}), skipping download")
-        return existing[:max_games]
+    existing_count = count_lines(checkpoint_path)
+    if existing_count >= max_games:
+        log(f"Checkpoint already has {fmt_num(existing_count)} games (target: {fmt_num(max_games)}), skipping download")
+        return []
 
-    already_kept = len(existing)
+    already_kept = existing_count
     remaining = max_games - already_kept
 
     if already_kept > 0:
@@ -204,4 +215,4 @@ def download_games(
     log(f"  Skipped (< 10 moves): {fmt_num(skipped_short)}")
     log(f"  Time:                 {fmt_time(elapsed)}")
 
-    return load_checkpoint(checkpoint_path)[:max_games]
+    return []
