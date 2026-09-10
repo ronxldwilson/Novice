@@ -317,6 +317,11 @@ def main():
                              "Depth 1-3 are genuinely weak opponents.")
     parser.add_argument("--sf-time", type=float, default=0.1,
                         help="Stockfish seconds per move when using UCI_Elo")
+    parser.add_argument("--sf-skill", type=int, default=None,
+                        help="Stockfish Skill Level 0-20. Weaker than the "
+                             "UCI_Elo floor of 1320; 0 plays deliberately badly.")
+    parser.add_argument("--sf-nodes", type=int, default=None,
+                        help="Cap Stockfish nodes per move")
     parser.add_argument("--adapter-path", default=None)
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--elo-levels", type=int, nargs="+", default=ELO_LEVELS)
@@ -378,7 +383,16 @@ def main():
         log(f"Playing against Stockfish Elo {elo}")
         print("─" * 80, flush=True)
 
-        if args.sf_depth:
+        if args.sf_skill is not None:
+            sf_engine.configure({"UCI_LimitStrength": False, "Skill Level": args.sf_skill,
+                                 "Threads": 1, "Hash": 64})
+            if args.sf_nodes:
+                sf_limit = chess.engine.Limit(nodes=args.sf_nodes)
+            elif args.sf_depth:
+                sf_limit = chess.engine.Limit(depth=args.sf_depth)
+            else:
+                sf_limit = chess.engine.Limit(time=args.sf_time)
+        elif args.sf_depth:
             sf_engine.configure({"UCI_LimitStrength": False, "Threads": 1, "Hash": 64})
             sf_limit = chess.engine.Limit(depth=args.sf_depth)
         else:
