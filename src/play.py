@@ -8,8 +8,11 @@ import chess.engine
 import mlx_lm
 from mlx_lm.sample_utils import make_sampler
 
+from selection_infer import best_move, score_moves
 
-MODEL = "Qwen/Qwen2.5-0.5B"
+
+LOCAL_MODEL = Path(__file__).parent.parent / "models" / "Qwen2.5-0.5B"
+MODEL = str(LOCAL_MODEL) if LOCAL_MODEL.exists() else "Qwen/Qwen2.5-0.5B"
 ADAPTERS_BASIC = Path(__file__).parent.parent / "adapters" / "basic"
 ADAPTERS_ANNOTATED = Path(__file__).parent.parent / "adapters" / "annotated"
 STOCKFISH_PATH = "stockfish"
@@ -123,6 +126,10 @@ def main():
     parser = argparse.ArgumentParser(description="Play chess against the fine-tuned model")
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--annotated", action="store_true", help="Use annotated (reasoning) model")
+    parser.add_argument("--selection", action="store_true",
+                        help="Best model: constrained ranking over legal moves")
+    parser.add_argument("--no-safe", action="store_true",
+                        help="With --selection, disable the SEE blunder filter")
     parser.add_argument("--adapter-path", default=None, help="Override adapter path")
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--play-as", choices=["white", "black"], default="white")
@@ -131,6 +138,8 @@ def main():
 
     if args.adapter_path:
         adapter_path = Path(args.adapter_path)
+    elif args.selection:
+        adapter_path = Path(__file__).parent.parent / "adapters" / "selection_sf"
     elif args.annotated:
         adapter_path = ADAPTERS_ANNOTATED
     else:
@@ -154,13 +163,25 @@ def main():
 
     board = chess.Board()
     human_is_white = args.play_as == "white"
-    mode = "annotated (reasoning)" if args.annotated else "basic"
+    mode = ("selection + blunder filter" if args.selection and not args.no_safe
+            else "selection" if args.selection
+            else "annotated (reasoning)" if args.annotated else "basic")
 
     print(f"\nChess SLM ({mode}) — type moves in SAN (e.g., e4, Nf3, O-O)")
     print("Commands: 'quit', 'board', 'undo'")
     print(f"You are playing as {'White' if human_is_white else 'Black'}\n")
 
     def do_model_move():
+        if args.selection:
+            move = best_move(model, tokenizer, board, temperature=0.0,
+                             safe=not args.no_safe)
+            if args.show_reasoning:
+                top = score_moves(model, tokenizer, board)[:4]
+                print("  model ranking: " +
+                      ", ".join(f"{s} ({v:+.2f})" for s, v in top))
+            print(f"Model plays: {board.san(move)}")
+            board.push(move)
+            return
         if args.annotated:
             move, reasoning = get_model_move_annotated(model, tokenizer, board, args.temperature, engine)
             if args.show_reasoning and reasoning:

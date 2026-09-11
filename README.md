@@ -144,15 +144,29 @@ Options:
 ### Step 3: Play
 
 ```bash
-# Play against the basic model
-uv run python src/play.py
+# Best model: constrained ranking + blunder filter
+uv run python src/play.py --selection
+
+# Show what the model was considering
+uv run python src/play.py --selection --show-reasoning
+
+# Pure model, no blunder filter
+uv run python src/play.py --selection --no-safe
 
 # Play as black
-uv run python src/play.py --play-as black
+uv run python src/play.py --selection --play-as black
 ```
 
-The strongest model is `adapters/selection_sf`, driven through constrained
-ranking — see the evaluation section for how to run it.
+With `--show-reasoning` it prints its ranking over the legal moves. After 1.e4
+it produces:
+
+```
+model ranking: e5 (-0.50), Nf6 (-0.76), e6 (-0.93), c5 (-0.93)
+Model plays: e5
+```
+
+All four are main-line replies to 1.e4 — the opening repertoire it picked up
+from the Lichess games is recognisable.
 
 In-game commands:
 - Type moves in standard algebraic notation: `e4`, `Nf3`, `O-O`, `Qxd5`
