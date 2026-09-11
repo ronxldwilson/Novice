@@ -133,6 +133,37 @@ always reported separately. The SEE filter is defensible — it uses only chess
 rules and can only reorder the model's own candidates — but it must never be
 folded into a headline number.
 
+### Why the filter matters so much: the model hangs material 40% of the time
+
+Over 60 held-out positions, taking the model's own top-ranked move:
+
+| Measure | Value |
+|---|---|
+| top pick loses ≥1 pawn to the best reply (SEE) | **40%** |
+| filter overrode the model's choice | **40%** |
+
+This is the single clearest diagnosis of the model's weakness, and it explains
+the 5% → 20% jump from the blunder filter exactly. The network has learned what
+a *plausible* move looks like — its top choices in the Ruy Lopez are Nf6, d6,
+Be7, Bc5, all genuine book moves — but it has no tactical search, so two moves
+in five simply drop material.
+
+Better supervised data does not obviously fix this: a model with no lookahead
+cannot see that a natural-looking developing move loses a piece. Search is the
+missing ingredient, not more labels.
+
+Inspect any position yourself:
+
+```bash
+uv run python src/explain.py --moves "e4 e5 Nf3 Nc6 Bb5"
+```
+
+which prints the model's full distribution over legal moves, the SEE material
+verdict for each, and whether the filter intervened. Note the model has no
+chain-of-thought to display — it was trained with loss masked to the move token
+alone — so the probability distribution *is* its reasoning, and printing a
+verbal rationale would be fabrication.
+
 ### More engine data made play worse
 
 | Stage | Data | top1 (n=150) | Score vs Skill 0 (20 games) |

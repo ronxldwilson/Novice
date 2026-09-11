@@ -157,8 +157,39 @@ uv run python src/play.py --selection --no-safe
 uv run python src/play.py --selection --play-as black
 ```
 
-With `--show-reasoning` it prints its ranking over the legal moves. After 1.e4
-it produces:
+### Inspecting what the model believes
+
+The model has **no chain-of-thought** — it was trained with loss masked to the
+move token alone, so there is no verbal rationale to print and inventing one
+would be fabrication. What it does have is a probability distribution over the
+legal moves, and that is its actual opinion:
+
+```bash
+uv run python src/explain.py --moves "e4 e5 Nf3 Nc6 Bb5"
+```
+
+```
+Black to move — 30 legal moves
+
+  move      P(move)  material
+  --------------------------------------------------------
+  Nf6         11.1%       0  ███·····················  <- model's pick
+  Nge7         8.3%       0  ██······················
+  d5           8.2%    -100  ██······················
+  Bb4          8.2%       0  ██······················
+  d6           6.4%       0  ██······················
+
+  Playing Nf6 — model and filter agree.
+```
+
+`material` is the static-exchange verdict: 0 means nothing hangs, −100 means the
+move drops a pawn to the best reply. Here the model picks the Berlin Defence and
+its other favourites are all book moves — but it also likes `d5`, which loses a
+pawn. That failure mode is common: **its top pick hangs material in 40% of
+positions.**
+
+With `--show-reasoning`, `play.py` prints a short version of the same ranking.
+After 1.e4 it produces:
 
 ```
 model ranking: e5 (-0.50), Nf6 (-0.76), e6 (-0.93), c5 (-0.93)
