@@ -146,12 +146,12 @@ Options:
 # Play against the basic model
 uv run python src/play.py
 
-# Play against the annotated model with reasoning visible
-uv run python src/play.py --annotated --show-reasoning
-
 # Play as black
-uv run python src/play.py --annotated --play-as black
+uv run python src/play.py --play-as black
 ```
+
+The strongest model is `adapters/selection_sf`, driven through constrained
+ranking — see the evaluation section for how to run it.
 
 In-game commands:
 - Type moves in standard algebraic notation: `e4`, `Nf3`, `O-O`, `Qxd5`
@@ -189,24 +189,35 @@ The `[Context]` tag classifies the position based on evaluation change: `book`, 
 Measure the model's Elo by playing automated games against Stockfish at various strength levels:
 
 ```bash
-# Evaluate the selection model
-uv run python src/evaluate.py --selection
+# Best model, with the blunder filter, against Stockfish's weakest setting
+uv run python src/evaluate.py --safe --adapter-path adapters/selection_sf \
+  --games-per-level 20 --elo-levels 0 --sf-skill 0 --sf-depth 1
 
-# Evaluate basic model, custom settings
-uv run python src/evaluate.py --games-per-level 40 --elo-levels 1320 1500 1800
+# Pure model, no blunder filter - the honest measure of the network alone
+uv run python src/evaluate.py --constrained --adapter-path adapters/selection_sf \
+  --games-per-level 20 --elo-levels 0 --sf-skill 0 --sf-depth 1
 ```
 
-Note: Stockfish's minimum `UCI_Elo` is **1320**, so that is the weakest opponent
-available. Levels below it are rejected by the engine.
+**Always state the opponent configuration.** "Beats Stockfish" means nothing on
+its own. Stockfish exposes several independent weakening knobs:
 
-For a faster read on move quality without playing full games, use the prompt probe —
-it reports match% against human moves across sampled positions:
+| Flag | Meaning |
+|---|---|
+| `--sf-skill 0..20` | `Skill Level`; at 0 the engine deliberately plays inferior moves |
+| `--sf-depth N` | cap search depth; 1 is weak but still has a full static eval |
+| `--sf-nodes N` | cap nodes per move |
+| `--elo-levels 1320 …` | `UCI_Elo`, which **floors at 1320** — weaker settings need `--sf-skill` |
+
+`--safe` and `--constrained` must be reported separately: `--safe` adds the SEE
+blunder filter, which on current numbers contributes more than the network does.
+
+For a faster read on move quality without playing full games:
 
 ```bash
-uv run python src/probe_prompts.py --positions 80 --adapter-path adapters/selection
+uv run python src/eval_match.py --adapter-path adapters/selection_sf --n 150
 ```
 
-This plays 20 games per Elo level (half as white, half as black) and outputs:
+Games are split evenly between White and Black, and each run outputs:
 - Win/draw/loss record at each level
 - Legal move percentage (how often the model generates valid moves)
 - Estimated Elo rating using the performance rating formula
