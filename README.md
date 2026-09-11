@@ -2,6 +2,23 @@
 
 Fine-tune a small language model to play chess, using Apple Silicon (MLX) for fast local training and inference.
 
+## Where it got to
+
+Qwen 2.5 0.5B + LoRA, trained on Lichess games then on Stockfish-labelled
+positions. Against **Stockfish Skill Level 0 at depth 1**, over 20 games:
+
+**3 wins, 2 draws, 15 losses — 20%.** All three wins were checkmates. Legal move
+rate 100%.
+
+So it beats Stockfish sometimes, at Stockfish's weakest available setting, and
+loses to it overall. It loses every game at Skill Level 3 and above. That is the
+honest summary; the full picture, including two instructive negative results and
+an ablation showing how much of the play comes from the harness rather than the
+network, is in [RESULTS.md](RESULTS.md).
+
+Baseline for comparison: the untrained model produces a legal move under 30% of
+the time and is checkmated in ~40 moves every game.
+
 ## Overview
 
 This project trains [Qwen 2.5 0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B) to play chess via LoRA fine-tuning on high-quality games from the [Lichess open database](https://database.lichess.org/). Three training modes are available:
@@ -296,24 +313,32 @@ All three are **independent models** — each is its own LoRA adapter over the s
 - [x] Checkpoint/resume for downloads — survived a mid-run connection drop at 180K games
 - [x] Fix a 19 GB memory blowup by streaming conversion instead of buffering in RAM
 - [x] Baseline the untrained model: ~28% legal, 0 wins, effective Elo ~0
-- [x] Evaluation harness — plays Stockfish at fixed Elo, reports W/D/L, legal%, estimated Elo
+- [x] Evaluation harness — plays Stockfish at a stated configuration, reports W/D/L and legal%
 - [x] Train annotated model (18.6K examples, loss 1.82 → 0.85)
 - [x] **Discover the annotated model was reading Stockfish's answer, not playing chess**
 - [x] Prompt-format probe — proved prompting fixes legality but not skill
-- [x] Build selection-mode pipeline (data, training, inference) with no engine at inference
-- [x] Generate 754K selection examples in ~8 minutes
+- [x] Selection mode: FEN board state, masked completion loss, length filtering
+- [x] Constrained ranking — score every legal move, take argmax; illegal output impossible
+- [x] `match%` evaluator against held-out human and engine moves
+- [x] SEE blunder filter, reported separately from pure model play
+- [x] Stacked training: human labels → Stockfish labels, run unattended
+- [x] **First wins against Stockfish** — 3W/2D/15L vs Skill Level 0
 
 **Next**
 
-- [ ] Train and evaluate the selection model — the headline number is **match%**, not legal% or Elo
-- [ ] Report Elo for selection mode against Stockfish 1320+
-- [ ] **Stacked training** — basic first (notation and patterns), then selection on top (judgment). Like learning how the pieces move before learning strategy.
-- [ ] **Scale selection data** — 754K examples exist; only 300K are used to stay inside 16 GB. Test whether the full set helps.
-- [ ] **Stockfish-labelled selection data** — `--label stockfish` swaps human moves for engine best moves. Better labels, ~64h at depth 12 for 100K games; worth trying on a smaller slice.
-- [ ] **Puzzle evaluation** — Lichess puzzle set for tactical sharpness, independent of full-game Elo
-- [ ] **Larger base model** — Qwen 2.5 1.5B if 0.5B results justify it. Needs `--batch-size 2` on 16 GB.
-- [ ] **Instruct-tuned base** — we use the raw base model; `Qwen2.5-0.5B-Instruct` follows the selection format far more readily
-- [ ] **Self-play** — generate games, keep the winning side's moves, retrain
+- [ ] **Close the gap to Skill Level 3+**, where the model currently scores 0%.
+- [ ] **Investigate why stage 3 hurt.** More engine data raised top1 (20.0 → 21.3%)
+      but dropped play from 20% to 7.5%. The proxy metric and the objective came
+      apart; worth understanding before scaling data further.
+- [ ] **Strengthen the model rather than the harness.** The ablation shows the SEE
+      filter contributes most of the current wins (5% → 20%). That gap is the
+      real work.
+- [ ] **Search.** The model has none. Even 2-ply lookahead over its own top-k
+      would likely help more than additional supervised data.
+- [ ] **Instruct-tuned base** — `Qwen2.5-0.5B-Instruct` follows the selection
+      format more readily than the raw base model.
+- [ ] **Larger base model** — Qwen 2.5 1.5B, needs `--batch-size 2` on 16 GB.
+- [ ] **Self-play** — generate games, keep the winning side's moves, retrain.
 
 ## Performance Notes
 

@@ -80,6 +80,56 @@ ladder exists below it. `Skill Level` is a separate knob; at 0 the engine
 deliberately plays inferior moves. The opponent configuration is always stated
 because "beat Stockfish" is meaningless without it.
 
+## Final results
+
+Best model: **`adapters/selection_sf`** — Qwen 2.5 0.5B + LoRA (rank 32, all 24
+layers), trained on 388K human-labelled selection examples then continued on 58K
+Stockfish-labelled ones.
+
+### Does it beat Stockfish?
+
+**It wins games, but it does not win matches.** 20 games per row, model plays
+half as White and half as Black, constrained ranking, 100% legal moves throughout.
+
+| Opponent | Harness | W | D | L | Score |
+|---|---|---|---|---|---|
+| Skill 0, depth 1 | model + SEE | **3** | **2** | 15 | **20.0%** |
+| Skill 0, depth 1 | model only | 0 | 1 | 9 | 5.0% |
+| Skill 0, 0.1s/move | model + SEE | 0 | 1 | 9 | 5.0% |
+| Skill 3, depth 1 | model + SEE | 0 | 0 | 10 | 0.0% |
+| UCI_Elo 1320, 0.1s | model + SEE | 0 | 0 | 2 | 0.0% |
+
+The three wins were genuine checkmates delivered by the model, not timeouts or
+adjudications. But at 20% aggregate against Stockfish's weakest available
+setting, the honest summary is: **beats Stockfish occasionally at Skill Level 0,
+loses to it overall, and loses to everything above it.**
+
+### How much is the model and how much is the harness?
+
+| Configuration | Score |
+|---|---|
+| model only (constrained ranking) | 5.0% |
+| model + SEE blunder filter | 20.0% |
+
+Most of the winning comes from the blunder filter, not the network. This is the
+same trap as the annotated experiment in a milder form, which is why the two are
+always reported separately. The SEE filter is defensible — it uses only chess
+rules and can only reorder the model's own candidates — but it must never be
+folded into a headline number.
+
+### More engine data made play worse
+
+| Stage | Data | top1 (n=150) | Score vs Skill 0 (20 games) |
+|---|---|---|---|
+| stage 2 | 58K Stockfish labels | 20.0% | **20.0%** |
+| stage 3 | +135K more, continued | **21.3%** | 7.5% |
+
+Stage 3 improved the proxy metric and degraded the thing we actually care about.
+Move-match agreement and playing strength came apart: agreeing slightly more
+often with the engine while blundering more decisively in the games that matter.
+Stage 2 is shipped as the best model on the strength of the games, not the
+match%.
+
 ## Baselines
 
 ### Untrained model, no scaffolding
