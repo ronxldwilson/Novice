@@ -14,6 +14,7 @@ from mlx_lm.sample_utils import make_sampler
 
 from utils import selection_prompt_for_board
 from selection_infer import best_move
+from search import search_best_move
 
 MODEL = "Qwen/Qwen2.5-0.5B"
 ADAPTERS_BASIC = Path(__file__).parent.parent / "adapters" / "basic"
@@ -175,6 +176,8 @@ def play_game(
     eval_engine: chess.engine.SimpleEngine | None,
     temperature: float,
     sf_limit: chess.engine.Limit,
+    search_depth: int = 2,
+    search_topk: int = 6,
     max_moves: int = 200,
 ) -> dict:
     """Play one game between the model and Stockfish. Returns game stats."""
@@ -188,7 +191,11 @@ def play_game(
 
         if is_model_turn:
             t0 = time.time()
-            if mode in ("constrained", "safe"):
+            if mode == "search":
+                move, _ = search_best_move(model, tokenizer, board,
+                                           top_k=search_topk, depth=search_depth)
+                was_legal = True
+            elif mode in ("constrained", "safe"):
                 move = best_move(model, tokenizer, board, temperature=0.0,
                                  safe=(mode == "safe"))
                 was_legal = True
@@ -312,6 +319,10 @@ def main():
                         help="Score every legal move and take argmax (always legal)")
     parser.add_argument("--safe", action="store_true",
                         help="Constrained ranking plus SEE blunder filter")
+    parser.add_argument("--search", action="store_true",
+                        help="Model proposes top-k, alpha-beta verifies (strongest)")
+    parser.add_argument("--search-depth", type=int, default=2)
+    parser.add_argument("--search-topk", type=int, default=6)
     parser.add_argument("--sf-depth", type=int, default=None,
                         help="Cap Stockfish search depth instead of using UCI_Elo. "
                              "Depth 1-3 are genuinely weak opponents.")
@@ -336,7 +347,7 @@ def main():
     # Load model
     if args.adapter_path:
         adapter_path = Path(args.adapter_path)
-    elif args.selection or args.constrained or args.safe:
+    elif args.selection or args.constrained or args.safe or args.search:
         adapter_path = ADAPTERS_SELECTION
     elif args.annotated:
         adapter_path = ADAPTERS_ANNOTATED
@@ -364,7 +375,8 @@ def main():
 
     random.seed(args.seed)
 
-    mode = ("safe" if args.safe else "constrained" if args.constrained
+    mode = ("search" if args.search else "safe" if args.safe
+            else "constrained" if args.constrained
             else "selection" if args.selection
             else "annotated" if args.annotated else "basic")
     log(f"Mode: {mode}")
@@ -416,6 +428,7 @@ def main():
                     model, tokenizer, sf_engine, elo,
                     model_is_white, mode, eval_engine,
                     args.temperature, sf_limit,
+                    args.search_depth, args.search_topk,
                 )
                 game_time = time.time() - game_start
 
