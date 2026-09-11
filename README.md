@@ -20,6 +20,19 @@ network, is in [RESULTS.md](RESULTS.md).
 Baseline for comparison: the untrained model produces a legal move under 30% of
 the time and is checkmated in ~40 moves every game.
 
+Two results from the run are worth more than the win count:
+
+**Move-match agreement does not predict playing strength.** Four models were
+trained; agreement with Stockfish's chosen move rose from 15% to 25%, while
+game results got *worse*. The model that best imitates the engine plays
+materially worse than the one that imitates it least. Every model was
+ultimately selected on games, not on the proxy.
+
+**The model hangs material in 40% of positions.** It has learned what a
+plausible move looks like — its Ruy Lopez choices are all book moves — but it
+has no lookahead. That is a search problem, and no quantity of supervised data
+addressed it.
+
 ## Overview
 
 This project trains [Qwen 2.5 0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B) to play chess via LoRA fine-tuning on high-quality games from the [Lichess open database](https://database.lichess.org/). Three training modes are available:

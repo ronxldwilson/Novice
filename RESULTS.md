@@ -164,6 +164,38 @@ chain-of-thought to display — it was trained with loss masked to the move toke
 alone — so the probability distribution *is* its reasoning, and printing a
 verbal rationale would be fabrication.
 
+### The main negative result: match% does not predict playing strength
+
+Four models, same harness, same opponent. `top1` is agreement with Stockfish's
+move on held-out positions; `score` is 20+ games vs Skill 0 with the SEE filter.
+
+| Model | Training | top1 | Score |
+|---|---|---|---|
+| stage 1 | human labels only | 11.7–15.0% | — |
+| **stage 2** | human → 58K engine | 20.0% | **20.5%** (44 games) |
+| stage 3 | stage 2 + 135K more engine | 21.3% | 7.5% |
+| engine-only | 194K engine, fresh from base | **25.3%** | 12.5% |
+
+**Agreement with the engine went up monotonically; playing strength did not.**
+The model that imitates Stockfish best (25.3%) plays materially worse than the
+one that imitates it least (20.0%). Across three attempts to improve the
+metric, none improved the games.
+
+Two things this rules out and one it suggests:
+
+* *Not* simply undertrained — engine-only saw 194K examples fresh and still
+  lost ground. Validation loss also began rising after ~6000 iters (1.998 →
+  2.017), so it was already at its useful limit.
+* *Not* a bad label source — engine labels clearly beat human ones on the proxy.
+* Most likely **imitation without search does not compose.** Copying a depth-10
+  move you cannot verify puts you in sharp positions you then cannot navigate.
+  Stage 2's more human-influenced policy appears to produce duller, more robust
+  positions that a searchless model survives longer.
+
+The practical consequence is that `match%` was a convenient proxy and a
+misleading one. Every model here was selected on games in the end, and stage 2
+ships despite having the worst match% of the three engine-trained variants.
+
 ### More engine data made play worse
 
 | Stage | Data | top1 (n=150) | Score vs Skill 0 (20 games) |
