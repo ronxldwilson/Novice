@@ -8,7 +8,8 @@ Qwen 2.5 0.5B + LoRA, trained on Lichess games then on Stockfish-labelled
 positions. Against **Stockfish Skill Level 0 at depth 1**, over 20 games:
 
 **3 wins, 2 draws, 15 losses — 20%.** All three wins were checkmates. Legal move
-rate 100%.
+rate 100%. Pooled across three checkpoints (44 games) the score is **20.5%**,
+so this is a stable figure rather than one lucky run.
 
 So it beats Stockfish sometimes, at Stockfish's weakest available setting, and
 loses to it overall. It loses every game at Skill Level 3 and above. That is the

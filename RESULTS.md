@@ -104,6 +104,22 @@ adjudications. But at 20% aggregate against Stockfish's weakest available
 setting, the honest summary is: **beats Stockfish occasionally at Skill Level 0,
 loses to it overall, and loses to everything above it.**
 
+### Checkpoint comparison — and the pooled figure
+
+Three stage-2 checkpoints against the same opponent, to check we were not just
+reading noise off one lucky save:
+
+| Checkpoint | games | W | D | L | Score |
+|---|---|---|---|---|---|
+| @2000 | 12 | 1 | 4 | 7 | 25.0% |
+| @3000 | 12 | 1 | 2 | 9 | 16.7% |
+| @4000 | 20 | 3 | 2 | 15 | 20.0% |
+| **pooled** | **44** | **5** | **8** | **31** | **20.5%** |
+
+No checkpoint is meaningfully better than the others — the spread is noise. The
+pooled 44-game figure of **20.5%** is the number to quote, rather than the
+best-looking single run.
+
 ### How much is the model and how much is the harness?
 
 | Configuration | Score |
